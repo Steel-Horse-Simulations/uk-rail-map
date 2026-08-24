@@ -4,6 +4,9 @@ A desktop editor for schematic railway maps of the UK and Ireland, in the London
 Underground idiom: octilinear track, bundled parallel services, tick marks for
 calls, capsule interchanges.
 
+See `CLAUDE.md` for the full design brief — the visual rules, the geometry
+constraints and the decisions behind them.
+
 ## The model
 
 - A **route** is the base layer — physical track, holding every station along it.
@@ -45,6 +48,8 @@ src/main/               Electron main process, file dialogs, PDF export, updates
 src/renderer/           the editor window
 assets/uk-base.svg      generated coastline
 tools/build_basemap.py  regenerates that coastline from Natural Earth data
+                        (needs `pip install shapely`)
+tools/build_places.py   regenerates the towns overlay
 ```
 
 `src/core` deliberately has no DOM or Electron dependencies, so the same

@@ -5,6 +5,7 @@ Projects every settlement in the UK, Ireland and the Isle of Man into the same
 pixel space as assets/uk-base.svg, so the dots land where they belong on the
 coastline. Tiers let the editor thin the layer out as you zoom away.
 
+Requires shapely (pip install shapely).
 Source: geonames cities500 (every place of 500 people or more).
 Run from the project root:  python tools/build_places.py path/to/cities500.json
 """
@@ -14,10 +15,10 @@ import sys
 
 # these must match tools/build_basemap.py exactly
 LAT0 = 55.0
-K = 190.0
+K = 5000.0
 LAT_MAX, LAT_MIN = 59.15, 49.75
 LON_MIN, LON_MAX = -11.2, 2.6
-PAD = 46.0
+PAD = 1050.0
 
 
 def proj(lon, lat):

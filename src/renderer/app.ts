@@ -14,7 +14,7 @@ import {
 } from '../core/model';
 import { renderSvg } from '../core/render';
 import { elbow, isOctilinear, snapOctilinear } from '../core/geometry';
-import { BASEMAP_SVG, PLACES } from '../generated/assets';
+import { BASEMAP_H, BASEMAP_SVG, BASEMAP_W, PLACES } from '../generated/assets';
 
 /** A town or city from the overlay: name, position, population, tier. */
 export interface Place {
@@ -51,8 +51,8 @@ const state = {
   basemap: '',
   places: [] as Place[],
   tool: 'station' as Tool,
-  zoom: 0.5,
-  pan: { x: 40, y: 20 },
+  zoom: 0.025,
+  pan: { x: 0, y: 0 },
   showGrid: true,
   showTowns: false,
   /** minimum population a town needs before it is drawn */
@@ -984,7 +984,7 @@ wrap.addEventListener(
       return;
     }
     const before = state.zoom;
-    state.zoom = Math.min(8, Math.max(0.08, state.zoom * (ev.deltaY < 0 ? 1.12 : 0.893)));
+    state.zoom = Math.min(8, Math.max(0.008, state.zoom * (ev.deltaY < 0 ? 1.12 : 0.893)));
     const r = wrap.getBoundingClientRect();
     const mx = ev.clientX - r.left;
     const my = ev.clientY - r.top;
@@ -1060,6 +1060,8 @@ $('#lock').onclick = () => {
   renderPanels();
 };
 
+$('#fit').onclick = fitToMap;
+
 $('#grid').onclick = () => {
   state.showGrid = !state.showGrid;
   $('#grid').classList.toggle('on', state.showGrid);
@@ -1100,6 +1102,16 @@ async function save() {
   }
 }
 
+/** Frame the whole country, whatever size the window is. */
+function fitToMap() {
+  const r = wrap.getBoundingClientRect();
+  const z = Math.min(r.width / BASEMAP_W, r.height / BASEMAP_H) * 0.94;
+  state.zoom = z;
+  state.pan.x = (r.width - BASEMAP_W * z) / 2;
+  state.pan.y = (r.height - BASEMAP_H * z) / 2;
+  draw();
+}
+
 function setMessage(m: string) {
   $('#msg').textContent = m;
 }
@@ -1123,6 +1135,6 @@ $('#restart').onclick = () => window.api.installUpdate();
   state.basemap = BASEMAP_SVG;
   state.places = PLACES;
   $('#ver').textContent = `v${await window.api.version()}`;
-  draw();
+  fitToMap();
   renderPanels();
 })();
