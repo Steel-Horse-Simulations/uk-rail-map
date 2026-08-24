@@ -6,16 +6,40 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <header class="titlebar">
+    <span class="dot"></span>
+    <span class="name">UK Rail Map</span>
+    <span class="file" id="filename">— untitled</span>
+    <span class="badge" id="ver">v0.1.0</span>
+  </header>
+
   <div class="toolbar">
-    <button class="tool" data-tool="select">Select</button>
-    <button class="tool on" data-tool="station">Station</button>
-    <button class="tool" data-tool="route">Route</button>
+    <button class="tool" data-tool="select" title="Select and move">
+      <svg class="glyph" viewBox="0 0 14 14"><path d="M3 1l8 6-3.4.9L9 12l-1.6.7-1.4-3.6L3 11z" fill="currentColor"/></svg>Select</button>
+    <button class="tool on" data-tool="station" title="Place stations">
+      <svg class="glyph" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="2"/></svg>Station</button>
+    <button class="tool" data-tool="route" title="Click stations in order">
+      <svg class="glyph" viewBox="0 0 14 14"><path d="M1 7h12" stroke="currentColor" stroke-width="2"/><path d="M5 4v6M9 4v6" stroke="currentColor" stroke-width="1.6"/></svg>Route</button>
+    <button class="tool" data-tool="pan" title="Drag to pan - or hold space">
+      <svg class="glyph" viewBox="0 0 14 14"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.8"/></svg>Pan</button>
+
     <span class="sep"></span>
-    <button id="finish-route" class="tool">Finish route</button>
-    <button id="lock" class="tool">Lock selection</button>
+    <button id="finish-route" class="tool acc hidden">Finish route</button>
+    <button id="cancel-route" class="tool hidden">Cancel</button>
+    <button id="flip-bend" class="tool hidden">Flip bend</button>
+    <button id="add-service" class="tool">Add service</button>
+    <button id="operators" class="tool">Operators</button>
+    <button id="lock" class="tool">Lock</button>
+
+    <span class="sep"></span>
+    <button id="grid" class="tool on">Grid</button>
     <button id="towns" class="tool">Towns</button>
+    <span class="slider hidden" id="town-slider-wrap">
+      <input type="range" id="town-slider" min="0" max="100" value="45">
+      <label for="town-slider" id="town-count">-</label>
+    </span>
+
     <span class="spacer"></span>
-    <span class="ver" id="ver"></span>
     <button id="save" class="tool">Save</button>
     <button id="export-svg" class="tool">Export SVG</button>
   </div>
@@ -24,23 +48,27 @@
     <aside class="rail">
       <h2>Routes</h2>
       <ul id="routes"></ul>
+      <p class="empty" id="routes-empty">None yet. Place stations, then pick the Route tool and click them in order.</p>
       <h2>Services</h2>
       <ul id="services"></ul>
-      <button id="add-service" class="mini">Add service to selected route</button>
+      <p class="empty" id="services-empty">None yet. Select a route and press Add service.</p>
     </aside>
 
     <main id="canvas-wrap"><div id="canvas"></div></main>
 
-    <aside class="insp" id="inspector"><p class="hint">Nothing selected.</p></aside>
+    <aside class="insp" id="inspector"></aside>
   </div>
 
   <div class="status">
-    <span id="cell">—</span>
-    <span id="zoom">100%</span>
+    <span><b>Cell</b> <span id="cell">-</span></span>
+    <span><b>Zoom</b> <span id="zoom">100%</span></span>
     <span id="counts"></span>
     <span class="spacer"></span>
     <span id="msg"></span>
   </div>
+
+  <div id="dialog" class="dialog hidden"><div class="sheet" id="dialog-body"></div></div>
+
   <div id="update-bar" class="update hidden">
     An update is ready. <button id="restart">Restart to apply</button>
   </div>

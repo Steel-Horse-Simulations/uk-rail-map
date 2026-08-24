@@ -1,10 +1,11 @@
-name: Release
+name: Build and release
 
-# Push a version tag (v0.1.1) and this builds the Windows installer and
-# publishes it to GitHub Releases. The app's updater reads that same feed.
+# Every push to main builds the Windows installer and publishes it to Releases,
+# so shipping an update means committing in GitHub Desktop and nothing else.
+# The version in package.json names the release; bump it when you want a new one.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -19,10 +20,36 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build
-      - name: Build and publish installer
-        run: npx electron-builder --win --publish always
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Read version
+        id: v
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Has this version already been released?
+        id: check
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and publish
+        if: steps.check.outputs.exists == 'false'
+        run: npm run build && npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Already released
+        if: steps.check.outputs.exists == 'true'
+        run: echo "v${{ steps.v.outputs.version }} is already published - bump the version in package.json to ship a new one."

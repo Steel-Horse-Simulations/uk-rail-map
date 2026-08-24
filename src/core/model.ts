@@ -63,6 +63,8 @@ export interface Service {
   routeIds: string[];
   /** The stations it actually calls at. Everything else on the path is passed. */
   calls: string[];
+  /** Position across a shared corridor. Lower sits on one side, higher the other. */
+  order?: number;
   oneWayWhole?: boolean;
   oneWayRuns?: OneWayRun[];
   /** Which side of the line the bus or ferry glyph sits on. */

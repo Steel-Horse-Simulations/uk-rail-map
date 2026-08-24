@@ -48,6 +48,30 @@ export function unitSteps(a: Cell, b: Cell): Step[] {
 }
 
 /**
+ * Work out the bend needed to join two cells that are not already in line.
+ *
+ * Any two cells can be joined by one straight run and one diagonal, and there
+ * are two ways round: straight first, or diagonal first. Returns the corner
+ * cell, or null if the cells are already on 90 or 45 degrees.
+ */
+export function elbow(a: Cell, b: Cell, diagonalFirst = false): Cell | null {
+  if (isOctilinear(a, b)) return null;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const adx = Math.abs(dx);
+  const ady = Math.abs(dy);
+  const m = Math.min(adx, ady);
+  const sx = Math.sign(dx);
+  const sy = Math.sign(dy);
+  if (diagonalFirst) {
+    return { x: a.x + sx * m, y: a.y + sy * m };
+  }
+  return adx > ady
+    ? { x: b.x - sx * m, y: a.y }
+    : { x: a.x, y: b.y - sy * m };
+}
+
+/**
  * Snap an arbitrary target onto the nearest legal cell reachable from `from`,
  * which is what the editor uses while a station is being dragged.
  */

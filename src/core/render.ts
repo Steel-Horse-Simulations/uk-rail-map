@@ -88,6 +88,10 @@ export interface RenderOptions {
   theme?: Theme;
   /** base map SVG markup dropped in behind the network */
   basemap?: string;
+  /** extra layers behind the network (grid, towns) */
+  underlays?: string;
+  /** extra layers in front (drawing preview, selection) */
+  overlays?: string;
   palette?: string[];
 }
 
@@ -111,7 +115,7 @@ export function renderSvg(opts: RenderOptions): string {
     services.map<LaneInput>((s, i) => ({
       id: s.id,
       steps: stepsFor(servicePath(doc, s)),
-      rank: i,
+      rank: s.order ?? i,
     })),
   );
 
@@ -158,6 +162,21 @@ export function renderSvg(opts: RenderOptions): string {
 
     return { service: svc, steps, colour, hits, ...({ pts } as object) } as Drawn & { pts: typeof pts };
   });
+
+  // ---- routes with nothing running over them yet --------------------------
+  // A route is real track whether or not a service uses it, so it has to be
+  // drawn: grey, with grey names, until the first service arrives.
+  const baseLines: string[] = [];
+  for (const rt of Object.values(doc.routes)) {
+    if (routeHasServices(doc, rt.id)) continue;
+    const cells: Cell[] = rt.path.map((n) => nodeCell(doc, n));
+    if (cells.length < 2) continue;
+    let d = `M ${(cells[0].x * cs).toFixed(1)} ${(cells[0].y * cs).toFixed(1)}`;
+    for (const c of cells.slice(1)) d += ` L ${(c.x * cs).toFixed(1)} ${(c.y * cs).toFixed(1)}`;
+    baseLines.push(
+      `<path d="${d}" fill="none" stroke="${theme.grey}" stroke-width="${theme.lineWidth}" stroke-linejoin="round" stroke-linecap="round"/>`,
+    );
+  }
 
   // ---- lines --------------------------------------------------------------
   const under: string[] = [];
@@ -206,7 +225,22 @@ export function renderSvg(opts: RenderOptions): string {
   for (const st of Object.values(doc.stations)) {
     const calling = drawn.filter((d) => d.service.calls.includes(st.id) && d.hits.has(st.id));
     const passing = drawn.filter((d) => !d.service.calls.includes(st.id) && d.hits.has(st.id));
-    if (calling.length === 0 && passing.length === 0) continue;
+    // a station with no service yet still needs to be on the map
+    if (calling.length === 0 && passing.length === 0) {
+      const bar = stationExtent(st, cs);
+      if (bar) {
+        over.push(
+          `<line x1="${bar[0].x}" y1="${bar[0].y}" x2="${bar[1].x}" y2="${bar[1].y}" stroke="${theme.grey}" stroke-width="${2 * R + 2 * border}" stroke-linecap="round"/>`,
+          `<line x1="${bar[0].x}" y1="${bar[0].y}" x2="${bar[1].x}" y2="${bar[1].y}" stroke="#ffffff" stroke-width="${2 * R}" stroke-linecap="round"/>`,
+        );
+      } else {
+        const p = toPx(st.cells[0]);
+        over.push(
+          `<circle cx="${p.x}" cy="${p.y}" r="${R}" fill="#ffffff" stroke="${theme.grey}" stroke-width="${border}"/>`,
+        );
+      }
+      continue;
+    }
 
     if (st.kind === 'grey') {
       const p = toPx(st.cells[0]);
@@ -216,6 +250,27 @@ export function renderSvg(opts: RenderOptions): string {
       continue;
     }
     if (calling.length === 0) continue;
+
+    // A dot is a deliberate choice: only where the station is set to Terminus,
+    // or ticked as an interchange. The end of a line is otherwise just a tick.
+    if (!st.interchange && st.kind === 'terminus') {
+      const pts = calling.map((d) => d.hits.get(st.id)!.pt);
+      const cx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
+      const cy = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+      const ring = calling.length === 1 ? calling[0].colour : theme.ink;
+      const extent = stationExtent(st, cs);
+      if (extent) {
+        over.push(
+          `<line x1="${extent[0].x}" y1="${extent[0].y}" x2="${extent[1].x}" y2="${extent[1].y}" stroke="${ring}" stroke-width="${2 * R + 2 * border}" stroke-linecap="round"/>`,
+          `<line x1="${extent[0].x}" y1="${extent[0].y}" x2="${extent[1].x}" y2="${extent[1].y}" stroke="#ffffff" stroke-width="${2 * R}" stroke-linecap="round"/>`,
+        );
+      } else {
+        over.push(
+          `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="#ffffff" stroke="${ring}" stroke-width="${border}"/>`,
+        );
+      }
+      continue;
+    }
 
     if (!st.interchange && calling.length >= 1) {
       // ordinary stop: one tick per calling service, in that service's colour,
@@ -242,6 +297,8 @@ export function renderSvg(opts: RenderOptions): string {
       arms.set(axis, list);
     }
     const bars: [Pt, Pt][] = [];
+    const extent = stationExtent(st, cs);
+    if (extent) bars.push(extent);
     for (const [, list] of arms) {
       list.sort((a, b) => a.lane - b.lane);
       const [p, q] = snap45(list[0].pt, list[list.length - 1].pt);
@@ -289,12 +346,35 @@ export function renderSvg(opts: RenderOptions): string {
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bounds.join(' ')}" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">`,
     defs,
     opts.basemap ?? '',
+    opts.underlays ?? '',
+    ...baseLines,
     ...under,
     ...lines,
     ...over,
     ...labels,
+    opts.overlays ?? '',
     '</svg>',
   ].join('\n');
+}
+
+/** The bar covering every cell a large station occupies, or null if it is one cell. */
+function stationExtent(st: Station, cs: number): [Pt, Pt] | null {
+  if (st.cells.length < 2) return null;
+  let a = st.cells[0];
+  let b = st.cells[0];
+  let best = -1;
+  for (const p of st.cells) {
+    for (const q of st.cells) {
+      const d = Math.hypot(p.x - q.x, p.y - q.y);
+      if (d > best) {
+        best = d;
+        a = p;
+        b = q;
+      }
+    }
+  }
+  const [p, q] = snap45({ x: a.x * cs, y: a.y * cs }, { x: b.x * cs, y: b.y * cs });
+  return [p, q];
 }
 
 function labelColour(

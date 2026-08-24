@@ -1,18 +1,19 @@
 {
   "name": "uk-rail-map",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Schematic railway map editor for the UK and Ireland",
   "main": "dist/main/main.js",
   "author": "",
   "license": "MIT",
   "scripts": {
     "build:main": "esbuild src/main/main.ts src/main/preload.ts --bundle --platform=node --external:electron --external:electron-updater --outdir=dist/main --format=cjs",
-    "build:renderer": "esbuild src/renderer/app.ts --bundle --platform=browser --outfile=dist/renderer/app.js && node scripts/copy-static.js",
+    "build:renderer": "npm run embed && esbuild src/renderer/app.ts --bundle --platform=browser --outfile=dist/renderer/app.js && node scripts/copy-static.js",
     "build": "npm run build:main && npm run build:renderer",
     "start": "npm run build && electron .",
     "typecheck": "tsc --noEmit",
     "dist": "npm run build && electron-builder --publish never",
-    "release": "npm run build && electron-builder --publish always"
+    "release": "npm run build && electron-builder --publish always",
+    "embed": "node scripts/embed-assets.js"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
@@ -29,7 +30,6 @@
     "productName": "UK Rail Map",
     "files": [
       "dist/**/*",
-      "assets/**/*",
       "package.json"
     ],
     "directories": {
@@ -39,17 +39,22 @@
       "target": [
         "nsis"
       ],
-      "artifactName": "UK-Rail-Map-Setup-${version}.${ext}"
+      "artifactName": "UK-Rail-Map-Setup-${version}.${ext}",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "createDesktopShortcut": true
     },
     "publish": [
       {
         "provider": "github",
         "owner": "Steel-Horse-Simulations",
-        "repo": "uk-rail-map"
+        "repo": "uk-rail-map",
+        "releaseType": "release"
       }
     ]
   }

@@ -3,3 +3,5 @@ dist/
 release/
 *.log
 .DS_Store
+# generated assets are rebuilt by npm run embed
+src/generated/

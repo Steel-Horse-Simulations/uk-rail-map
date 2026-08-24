@@ -13,6 +13,7 @@ function createWindow() {
     minHeight: 680,
     backgroundColor: '#E4F3F9',
     title: 'UK Rail Map',
+    icon: path.join(__dirname, '../../build/icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
