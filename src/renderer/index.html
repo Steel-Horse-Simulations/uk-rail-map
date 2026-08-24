@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>UK Rail Map</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="toolbar">
+    <button class="tool" data-tool="select">Select</button>
+    <button class="tool on" data-tool="station">Station</button>
+    <button class="tool" data-tool="route">Route</button>
+    <span class="sep"></span>
+    <button id="finish-route" class="tool">Finish route</button>
+    <button id="lock" class="tool">Lock selection</button>
+    <button id="towns" class="tool">Towns</button>
+    <span class="spacer"></span>
+    <span class="ver" id="ver"></span>
+    <button id="save" class="tool">Save</button>
+    <button id="export-svg" class="tool">Export SVG</button>
+  </div>
+
+  <div class="body">
+    <aside class="rail">
+      <h2>Routes</h2>
+      <ul id="routes"></ul>
+      <h2>Services</h2>
+      <ul id="services"></ul>
+      <button id="add-service" class="mini">Add service to selected route</button>
+    </aside>
+
+    <main id="canvas-wrap"><div id="canvas"></div></main>
+
+    <aside class="insp" id="inspector"><p class="hint">Nothing selected.</p></aside>
+  </div>
+
+  <div class="status">
+    <span id="cell">—</span>
+    <span id="zoom">100%</span>
+    <span id="counts"></span>
+    <span class="spacer"></span>
+    <span id="msg"></span>
+  </div>
+  <div id="update-bar" class="update hidden">
+    An update is ready. <button id="restart">Restart to apply</button>
+  </div>
+<script src="app.js"></script>
+</body>
+</html>

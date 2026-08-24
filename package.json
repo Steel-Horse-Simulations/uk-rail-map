@@ -1,0 +1,56 @@
+{
+  "name": "uk-rail-map",
+  "version": "0.1.0",
+  "description": "Schematic railway map editor for the UK and Ireland",
+  "main": "dist/main/main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "build:main": "esbuild src/main/main.ts src/main/preload.ts --bundle --platform=node --external:electron --external:electron-updater --outdir=dist/main --format=cjs",
+    "build:renderer": "esbuild src/renderer/app.ts --bundle --platform=browser --outfile=dist/renderer/app.js && node scripts/copy-static.js",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc --noEmit",
+    "dist": "npm run build && electron-builder --publish never",
+    "release": "npm run build && electron-builder --publish always"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "electron-updater": "^6.2.1"
+  },
+  "build": {
+    "appId": "uk.railmap.editor",
+    "productName": "UK Rail Map",
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "UK-Rail-Map-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Steel-Horse-Simulations",
+        "repo": "uk-rail-map"
+      }
+    ]
+  }
+}
