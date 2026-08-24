@@ -5,6 +5,8 @@ import {
   type MapDoc,
   type Project,
   type Route,
+  REGIONS,
+  type Region,
   type Service,
   type Station,
 } from '../core/model';
@@ -463,9 +465,17 @@ function renderServiceInspector() {
     <label class="f" for="so">Operator</label>
     <select id="so">
       <option value="">— none —</option>
-      ${operators
-        .map((o) => `<option value="${o.id}" ${sv.operatorId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`)
-        .join('')}
+      ${REGIONS.map((r) => {
+        const mine = operators.filter((o) => o.region === r.id);
+        if (!mine.length) return '';
+        return (
+          `<optgroup label="${r.name}">` +
+          mine
+            .map((o) => `<option value="${o.id}" ${sv.operatorId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`)
+            .join('') +
+          '</optgroup>'
+        );
+      }).join('')}
     </select>
 
     <label class="f" for="sc">Colour</label>
@@ -642,15 +652,22 @@ function openOperators() {
     <p class="lede">British and Irish operators are kept apart. A station's name takes the operator's colour when only one operator calls there.</p>
     <div id="oplist">
       ${ops.length ? '' : '<p class="hint">None yet.</p>'}
-      ${ops
-        .map(
-          (o) => `<div class="oprow">
-            <span class="sw" style="background:${o.colour ?? '#C7CCD2'}"></span>
-            <span><span class="nm">${esc(o.name)}</span><br><span class="mt">${o.colour ?? 'no colour set — names stay black'}${o.website ? ' · ' + esc(o.website) : ''}</span></span>
-            <button class="btn del" data-del="${o.id}">Remove</button>
-          </div>`,
-        )
-        .join('')}
+      ${REGIONS.map((r) => {
+        const mine = ops.filter((o) => o.region === r.id);
+        if (!mine.length) return '';
+        return (
+          `<h2 style="margin-top:14px">${r.name}</h2>` +
+          mine
+            .map(
+              (o) => `<div class="oprow">
+                <span class="sw" style="background:${o.colour ?? '#C7CCD2'}"></span>
+                <span><span class="nm">${esc(o.name)}</span><br><span class="mt">${o.colour ?? 'no colour set — names stay black'}${o.website ? ' · ' + esc(o.website) : ''}</span></span>
+                <button class="btn del" data-del="${o.id}">Remove</button>
+              </div>`,
+            )
+            .join('')
+        );
+      }).join('')}
     </div>
     <h3 style="font-size:14px;margin-top:16px">Add one</h3>
     <div class="grid2">
@@ -659,7 +676,9 @@ function openOperators() {
     </div>
     <div class="grid2" style="margin-top:8px">
       <input id="opsite" type="text" placeholder="Website (optional)">
-      <select id="opregion"><option value="gb">British</option><option value="ie">Irish</option></select>
+      <select id="opregion">
+        ${REGIONS.map((r) => `<option value="${r.id}">${r.name}</option>`).join('')}
+      </select>
     </div>
     <div class="actions">
       <button class="btn" id="opclose">Close</button>
@@ -691,7 +710,7 @@ function openOperators() {
       name,
       colour: ($('#opcol') as HTMLInputElement).value,
       website: ($('#opsite') as HTMLInputElement).value.trim() || undefined,
-      region: ($('#opregion') as HTMLSelectElement).value as 'gb' | 'ie',
+      region: ($('#opregion') as HTMLSelectElement).value as Region,
     };
     openOperators();
   };

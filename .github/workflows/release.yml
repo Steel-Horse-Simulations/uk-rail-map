@@ -19,10 +19,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
+      # npm install rather than npm ci, so a missing or out-of-step
+      # package-lock.json cannot stop a release
       - name: Install
-        run: npm ci
+        run: npm install
 
       - name: Typecheck
         run: npm run typecheck

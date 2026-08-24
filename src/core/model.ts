@@ -71,13 +71,24 @@ export interface Service {
   glyphSide?: 'left' | 'right';
 }
 
+/** Which country's list an operator is filed under. */
+export type Region = 'sco' | 'eng' | 'wal' | 'ni' | 'ire';
+
+export const REGIONS: { id: Region; name: string }[] = [
+  { id: 'sco', name: 'Scottish' },
+  { id: 'eng', name: 'English' },
+  { id: 'wal', name: 'Welsh' },
+  { id: 'ni', name: 'Northern Irish' },
+  { id: 'ire', name: 'Irish' },
+];
+
 export interface Operator {
   id: string;
   name: string;
   colour?: string;
   website?: string;
   logo?: string;
-  region: 'gb' | 'ie';
+  region: Region;
   metro?: boolean;
 }
 
