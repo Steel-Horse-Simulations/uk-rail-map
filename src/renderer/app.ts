@@ -6,6 +6,8 @@ import {
   type Project,
   type Route,
   REGIONS,
+  operatorRegions,
+  type Operator,
   type Region,
   type Service,
   type Station,
@@ -465,8 +467,8 @@ function renderServiceInspector() {
     <label class="f" for="so">Operator</label>
     <select id="so">
       <option value="">— none —</option>
-      ${REGIONS.map((r) => {
-        const mine = operators.filter((o) => o.region === r.id);
+      ${GROUPS.map((r) => {
+        const mine = operators.filter((o) => operatorGroups(o).includes(r.id));
         if (!mine.length) return '';
         return (
           `<optgroup label="${r.name}">` +
@@ -644,48 +646,91 @@ function refreshLists() {
 }
 
 // ---------------------------------------------------------------- operators
+/** Which heading an operator is filed under in the lists. */
+function operatorGroups(o: Operator): (Region | 'cross')[] {
+  return o.crossBorder ? ['cross'] : operatorRegions(o);
+}
+
+const GROUPS: { id: Region | 'cross'; name: string }[] = [
+  ...REGIONS,
+  { id: 'cross', name: 'Cross-border' },
+];
+
+let editingOperator: string | undefined;
+
 function openOperators() {
   const body = $('#dialog-body');
   const ops = Object.values(state.project.operators);
+  const editing = editingOperator ? state.project.operators[editingOperator] : undefined;
+  const chosen = editing ? operatorRegions(editing) : (['eng'] as Region[]);
+  const cross = editing?.crossBorder ?? false;
+
   body.innerHTML = `
     <h3>Operators</h3>
-    <p class="lede">British and Irish operators are kept apart. A station's name takes the operator's colour when only one operator calls there.</p>
+    <p class="lede">Filed by country. An operator that crosses a border sits under Cross-border, with every country it runs in recorded against it. A station's name takes the operator's colour when only one operator calls there.</p>
     <div id="oplist">
       ${ops.length ? '' : '<p class="hint">None yet.</p>'}
-      ${REGIONS.map((r) => {
-        const mine = ops.filter((o) => o.region === r.id);
+      ${GROUPS.map((g) => {
+        const mine = ops.filter((o) => operatorGroups(o).includes(g.id));
         if (!mine.length) return '';
         return (
-          `<h2 style="margin-top:14px">${r.name}</h2>` +
+          `<h2 style="margin-top:14px">${g.name}</h2>` +
           mine
-            .map(
-              (o) => `<div class="oprow">
+            .map((o) => {
+              const where = operatorRegions(o)
+                .map((r) => REGIONS.find((x) => x.id === r)?.name ?? r)
+                .join(', ');
+              return `<div class="oprow">
                 <span class="sw" style="background:${o.colour ?? '#C7CCD2'}"></span>
-                <span><span class="nm">${esc(o.name)}</span><br><span class="mt">${o.colour ?? 'no colour set — names stay black'}${o.website ? ' · ' + esc(o.website) : ''}</span></span>
-                <button class="btn del" data-del="${o.id}">Remove</button>
-              </div>`,
-            )
+                <span><span class="nm">${esc(o.name)}</span><br><span class="mt">${o.colour ?? 'no colour set — names stay black'}${o.crossBorder && where ? ' · ' + esc(where) : ''}${o.website ? ' · ' + esc(o.website) : ''}</span></span>
+                <button class="btn del" data-edit="${o.id}">Edit</button>
+                <button class="btn" data-del="${o.id}">Remove</button>
+              </div>`;
+            })
             .join('')
         );
       }).join('')}
     </div>
-    <h3 style="font-size:14px;margin-top:16px">Add one</h3>
+
+    <h3 style="font-size:14px;margin-top:18px">${editing ? 'Edit operator' : 'Add one'}</h3>
     <div class="grid2">
-      <input id="opname" type="text" placeholder="Name, e.g. ScotRail">
-      <input id="opcol" type="color" value="#1E5CB3">
+      <input id="opname" type="text" placeholder="Name, e.g. ScotRail" value="${editing ? esc(editing.name) : ''}">
+      <input id="opcol" type="color" value="${editing?.colour ?? '#1E5CB3'}">
     </div>
     <div class="grid2" style="margin-top:8px">
-      <input id="opsite" type="text" placeholder="Website (optional)">
-      <select id="opregion">
-        ${REGIONS.map((r) => `<option value="${r.id}">${r.name}</option>`).join('')}
+      <input id="opsite" type="text" placeholder="Website (optional)" value="${editing?.website ? esc(editing.website) : ''}">
+      <select id="opregion" ${cross ? 'disabled' : ''}>
+        ${REGIONS.map((r) => `<option value="${r.id}" ${chosen[0] === r.id ? 'selected' : ''}>${r.name}</option>`).join('')}
       </select>
     </div>
+    <div class="check" style="margin-top:8px">Runs in more than one country<input id="opcross" type="checkbox" ${cross ? 'checked' : ''}></div>
+    <div id="opcountries" class="picklist ${cross ? '' : 'hidden'}" style="margin-top:8px">
+      ${REGIONS.map(
+        (r) =>
+          `<label><input type="checkbox" data-reg="${r.id}" ${chosen.includes(r.id) ? 'checked' : ''}>${r.name}</label>`,
+      ).join('')}
+    </div>
+
     <div class="actions">
       <button class="btn" id="opclose">Close</button>
-      <button class="btn p" id="opadd">Add operator</button>
+      ${editing ? '<button class="btn" id="opcancel">Cancel edit</button>' : ''}
+      <button class="btn p" id="opadd">${editing ? 'Save changes' : 'Add operator'}</button>
     </div>
   `;
   $('#dialog').classList.remove('hidden');
+
+  const crossBox = $('#opcross') as HTMLInputElement;
+  crossBox.onchange = () => {
+    $('#opcountries').classList.toggle('hidden', !crossBox.checked);
+    ($('#opregion') as HTMLSelectElement).disabled = crossBox.checked;
+  };
+
+  body.querySelectorAll('[data-edit]').forEach((b) => {
+    (b as HTMLButtonElement).onclick = () => {
+      editingOperator = (b as HTMLButtonElement).dataset.edit;
+      openOperators();
+    };
+  });
   body.querySelectorAll('[data-del]').forEach((b) => {
     (b as HTMLButtonElement).onclick = () => {
       const id = (b as HTMLButtonElement).dataset.del!;
@@ -693,31 +738,66 @@ function openOperators() {
       for (const sv of Object.values(doc().services)) {
         if (sv.operatorId === id) sv.operatorId = undefined;
       }
+      if (editingOperator === id) editingOperator = undefined;
       openOperators();
       draw();
     };
   });
+
+  const cancel = document.querySelector('#opcancel') as HTMLButtonElement | null;
+  if (cancel) {
+    cancel.onclick = () => {
+      editingOperator = undefined;
+      openOperators();
+    };
+  }
   ($('#opclose') as HTMLButtonElement).onclick = () => {
+    editingOperator = undefined;
     $('#dialog').classList.add('hidden');
     renderPanels();
   };
   ($('#opadd') as HTMLButtonElement).onclick = () => {
     const name = ($('#opname') as HTMLInputElement).value.trim();
-    if (!name) return;
-    const id = newId('op');
+    if (!name) {
+      setMessage('Give the operator a name first.');
+      return;
+    }
+    const isCross = crossBox.checked;
+    const regions: Region[] = isCross
+      ? Array.from($('#opcountries').querySelectorAll('input'))
+          .filter((b) => (b as HTMLInputElement).checked)
+          .map((b) => (b as HTMLInputElement).dataset.reg as Region)
+      : [($('#opregion') as HTMLSelectElement).value as Region];
+    if (regions.length === 0) {
+      setMessage('Tick at least one country.');
+      return;
+    }
+    const id = editingOperator ?? newId('op');
     state.project.operators[id] = {
       id,
       name,
       colour: ($('#opcol') as HTMLInputElement).value,
       website: ($('#opsite') as HTMLInputElement).value.trim() || undefined,
-      region: ($('#opregion') as HTMLSelectElement).value as Region,
+      regions,
+      crossBorder: isCross && regions.length > 1,
+      region: undefined,
     };
+    // services already using it follow the new colour
+    for (const sv of Object.values(doc().services)) {
+      if (sv.operatorId === id) sv.colour = state.project.operators[id].colour;
+    }
+    editingOperator = undefined;
     openOperators();
+    draw();
   };
 }
-$('#operators').onclick = openOperators;
+$('#operators').onclick = () => {
+  editingOperator = undefined;
+  openOperators();
+};
 $('#dialog').onclick = (ev) => {
   if (ev.target === $('#dialog')) {
+    editingOperator = undefined;
     $('#dialog').classList.add('hidden');
     renderPanels();
   }

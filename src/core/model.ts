@@ -88,8 +88,19 @@ export interface Operator {
   colour?: string;
   website?: string;
   logo?: string;
-  region: Region;
+  /** Every country this operator runs in. One entry unless it crosses a border. */
+  regions: Region[];
+  /** Filed under Cross-border rather than under a single country. */
+  crossBorder?: boolean;
+  /** Older files stored a single country here. */
+  region?: Region;
   metro?: boolean;
+}
+
+/** Reads either shape, so maps saved before cross-border support still load. */
+export function operatorRegions(o: Operator): Region[] {
+  if (o.regions?.length) return o.regions;
+  return o.region ? [o.region] : [];
 }
 
 export interface MapDoc {

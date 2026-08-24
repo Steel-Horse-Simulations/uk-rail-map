@@ -1,6 +1,6 @@
 {
   "name": "uk-rail-map",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Schematic railway map editor for the UK and Ireland",
   "main": "dist/main/main.js",
   "author": "",
@@ -10,7 +10,7 @@
     "build:renderer": "npm run embed && esbuild src/renderer/app.ts --bundle --platform=browser --outfile=dist/renderer/app.js && node scripts/copy-static.js",
     "build": "npm run build:main && npm run build:renderer",
     "start": "npm run build && electron .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run embed && tsc --noEmit",
     "dist": "npm run build && electron-builder --publish never",
     "release": "npm run build && electron-builder --publish always",
     "embed": "node scripts/embed-assets.js"
