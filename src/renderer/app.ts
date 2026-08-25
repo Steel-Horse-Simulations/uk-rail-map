@@ -494,6 +494,17 @@ function renderInspector() {
       <button class="mini" id="rotauto" title="Back to working it out from the lines">Auto</button>
     </div>
     <div class="check">Lock rotation<input id="rlock" type="checkbox" ${st.rotationLocked ? 'checked' : ''}></div>
+    <label class="f">Tick and name side</label>
+    <div class="seg" id="tside">
+      <button data-s="right" class="${st.tickSide === 'left' ? '' : 'on'}">One side</button>
+      <button data-s="left" class="${st.tickSide === 'left' ? 'on' : ''}">The other</button>
+    </div>
+    <label class="f">Name angle</label>
+    <div class="seg" id="lang">
+      <button data-a="0" class="${st.labelAngle ? '' : 'on'}">Flat</button>
+      <button data-a="-45" class="${st.labelAngle === -45 ? 'on' : ''}">Up 45&deg;</button>
+      <button data-a="45" class="${st.labelAngle === 45 ? 'on' : ''}">Down 45&deg;</button>
+    </div>
     <label class="f">Arm of the T points</label>
     <select id="arm">
       <option value="">automatic</option>
@@ -548,6 +559,21 @@ function renderInspector() {
     if (st.rotationLocked && typeof st.rotation !== 'number') st.rotation = 0;
     renderPanels();
   };
+  $('#tside').querySelectorAll('button').forEach((b) => {
+    b.onclick = () => {
+      st.tickSide = (b as HTMLButtonElement).dataset.s as Station['tickSide'];
+      draw();
+      renderPanels();
+    };
+  });
+  $('#lang').querySelectorAll('button').forEach((b) => {
+    b.onclick = () => {
+      const v = Number((b as HTMLButtonElement).dataset.a);
+      st.labelAngle = v === -45 ? -45 : v === 45 ? 45 : 0;
+      draw();
+      renderPanels();
+    };
+  });
   ($('#arm') as HTMLSelectElement).onchange = (e) => {
     const v = (e.target as HTMLSelectElement).value;
     st.armSide = (v || undefined) as Station['armSide'];
@@ -776,7 +802,8 @@ function openInfill() {
       <div id="ifrows">
         ${infillNames
           .map(
-            (n, i) => `<div class="oprow" style="padding:6px 8px">
+            (n, i) => `<div class="oprow" draggable="true" data-row="${i}" style="padding:6px 8px">
+              <span class="grip" title="Drag to reorder">&#8942;&#8942;</span>
               <input type="text" data-i="${i}" value="${esc(n)}" placeholder="Station name" style="flex:1">
               <button class="btn" data-up="${i}">&uarr;</button>
               <button class="btn" data-down="${i}">&darr;</button>
@@ -796,12 +823,37 @@ function openInfill() {
         infillNames[Number((el as HTMLInputElement).dataset.i)] = (el as HTMLInputElement).value;
       };
     });
-    const move = (from: number, to: number) => {
-      if (to < 0 || to >= infillNames.length) return;
-      const [x] = infillNames.splice(from, 1);
-      infillNames.splice(to, 0, x);
+    function move(a: number, b: number) {
+      if (b < 0 || b >= infillNames.length) return;
+      const [x] = infillNames.splice(a, 1);
+      infillNames.splice(b, 0, x);
       render();
-    };
+    }
+    // drag a row to reorder, with the arrows still there for fine work
+    let from = -1;
+    body.querySelectorAll('[data-row]').forEach((el) => {
+      const row = el as HTMLElement;
+      row.ondragstart = () => {
+        from = Number(row.dataset.row);
+        row.style.opacity = '0.4';
+      };
+      row.ondragend = () => {
+        row.style.opacity = '';
+      };
+      row.ondragover = (ev) => {
+        ev.preventDefault();
+        row.style.borderTop = '2px solid #E8930C';
+      };
+      row.ondragleave = () => {
+        row.style.borderTop = '';
+      };
+      row.ondrop = (ev) => {
+        ev.preventDefault();
+        row.style.borderTop = '';
+        const to = Number(row.dataset.row);
+        if (from >= 0 && from !== to) move(from, to);
+      };
+    });
     body.querySelectorAll('[data-up]').forEach((b) => {
       (b as HTMLButtonElement).onclick = () => move(Number((b as HTMLButtonElement).dataset.up), Number((b as HTMLButtonElement).dataset.up) - 1);
     });

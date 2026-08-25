@@ -232,6 +232,9 @@ export function renderSvg(opts: RenderOptions): string {
 
   for (const d of drawn) {
     const pts = lanePolyline(d.steps, d.service.id, lanes, toPx, pitch);
+    // run the ends a little past the last station so the line tucks under its
+    // marker instead of stopping a hair short of it
+    extendEnds(pts, theme.lineWidth * 0.66 + 2.6);
     const path = roundedPath(pts, theme.cornerRadius);
     const grey = d.service.routeIds.every((r) => !routeHasServices(doc, r));
     const col = grey ? theme.grey : d.colour;
@@ -312,8 +315,10 @@ export function renderSvg(opts: RenderOptions): string {
           `<line x1="${extent[0].x}" y1="${extent[0].y}" x2="${extent[1].x}" y2="${extent[1].y}" stroke="#ffffff" stroke-width="${2 * R}" stroke-linecap="round"/>`,
         );
       } else {
+        // drawn as the interchange blob is, so the two match in size
         over.push(
-          `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="#ffffff" stroke="${ring}" stroke-width="${border}"/>`,
+          `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R + border / 2}" fill="${ring}"/>`,
+          `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="#ffffff"/>`,
         );
       }
       continue;
@@ -322,10 +327,11 @@ export function renderSvg(opts: RenderOptions): string {
     if (!st.interchange && calling.length >= 1) {
       // ordinary stop: one tick per calling service, in that service's colour,
       // sticking out of one side and long enough to graze the next line along
+      const sign = st.tickSide === 'left' ? -1 : 1;
       for (const d of calling) {
         const h = d.hits.get(st.id)!;
-        const nx = -h.dir.y;
-        const ny = h.dir.x;
+        const nx = -h.dir.y * sign;
+        const ny = h.dir.x * sign;
         const L = theme.lineWidth * 1.72;
         over.push(
           `<line x1="${h.pt.x.toFixed(1)}" y1="${h.pt.y.toFixed(1)}" x2="${(h.pt.x + nx * L).toFixed(1)}" y2="${(h.pt.y + ny * L).toFixed(1)}" stroke="${d.colour}" stroke-width="${theme.tickWidth}"/>`,
@@ -409,17 +415,40 @@ export function renderSvg(opts: RenderOptions): string {
   }
 
   // ---- labels -------------------------------------------------------------
+  // A name belongs at the far end of the station's tick, clear of the line, not
+  // sitting across it.
   const labels: string[] = [];
   for (const st of Object.values(doc.stations)) {
     if (!st.name) continue;
-    const p = toPx(st.cells[0]);
+    const calling = drawn.filter((d) => d.service.calls.includes(st.id) && d.hits.has(st.id));
     const colour = labelColour(doc, st, operators, theme);
-    const x = (p.x + R + 8).toFixed(1);
-    const y = (p.y + 4.8).toFixed(1);
+
+    let anchorPt = toPx(st.cells[0]);
+    let away = { x: 1, y: 0 };
+    if (calling.length) {
+      const h = calling[0].hits.get(st.id)!;
+      anchorPt = h.pt;
+      // the tick sticks out on one side; the name follows it
+      const sign = st.tickSide === 'left' ? -1 : 1;
+      away = { x: -h.dir.y * sign, y: h.dir.x * sign };
+      if (st.interchange || calling.length > 1) {
+        const c = stationCentre(st, cs);
+        const axis = stationAxis(st, calling, cs);
+        const sign = st.tickSide === 'left' ? -1 : 1;
+        anchorPt = c;
+        away = { x: -axis.y * sign, y: axis.x * sign };
+      }
+    }
+    const clear = st.interchange || calling.length > 1 ? R + border + 6 : theme.lineWidth * 1.72 + 5;
+    const x = anchorPt.x + away.x * clear;
+    const y = anchorPt.y + away.y * clear;
+    const anchor = away.x < -0.3 ? 'end' : away.x > 0.3 ? 'start' : 'middle';
+    const dy = away.y > 0.3 ? 12 : away.y < -0.3 ? -5 : 4.8;
+    const rot = st.labelAngle ? ` transform="rotate(${st.labelAngle} ${x.toFixed(1)} ${(y + dy).toFixed(1)})"` : '';
     const t = esc(st.name);
     labels.push(
-      `<text x="${x}" y="${y}" font-size="13.5" font-weight="600" fill="none" stroke="#ffffff" stroke-width="3.6" stroke-linejoin="round">${t}</text>`,
-      `<text x="${x}" y="${y}" font-size="13.5" font-weight="600" fill="${colour}">${t}</text>`,
+      `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" font-size="13.5" font-weight="600" text-anchor="${anchor}" fill="none" stroke="#ffffff" stroke-width="3.6" stroke-linejoin="round"${rot}>${t}</text>`,
+      `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" font-size="13.5" font-weight="600" text-anchor="${anchor}" fill="${colour}"${rot}>${t}</text>`,
     );
   }
 
@@ -517,6 +546,18 @@ function dominantSide(ending: Drawn[], centre: Pt, perp: Pt): Pt {
 function terminatesHere(doc: MapDoc, svc: Service, stationId: string): boolean {
   const ids = serviceStations(doc, svc);
   return ids.length > 0 && (ids[0] === stationId || ids[ids.length - 1] === stationId);
+}
+
+/** Push the first and last points outward along their own direction. */
+function extendEnds(pts: { x: number; y: number }[], by: number): void {
+  if (pts.length < 2 || by <= 0) return;
+  const push = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+    const len = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    a.x += ((a.x - b.x) / len) * by;
+    a.y += ((a.y - b.y) / len) * by;
+  };
+  push(pts[0], pts[1]);
+  push(pts[pts.length - 1], pts[pts.length - 2]);
 }
 
 function labelColour(

@@ -150,26 +150,64 @@ export function buildLanes(lines: LaneInput[]): LaneTable {
   }
 
   const rankOf = new Map(lines.map((l) => [l.id, l.rank]));
-  const chainOrder = new Map<string, string[]>();
+  const stepsOf = new Map(lines.map((l) => [l.id, new Set(l.steps.map(stepKey))]));
+
+  // Services in the same corridor, grouped by chain.
+  const chainMembers = new Map<string, string[]>();
   for (const [k, ids] of members) {
     const root = find(k);
-    const set = chainOrder.get(root) ?? [];
+    const set = chainMembers.get(root) ?? [];
     for (const id of ids) if (!set.includes(id)) set.push(id);
-    chainOrder.set(root, set);
+    chainMembers.set(root, set);
   }
-  for (const [root, ids] of chainOrder) {
-    ids.sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0));
-    chainOrder.set(root, ids);
+
+  /**
+   * Give each service a lane.
+   *
+   * Two services need separate lanes only where they actually run alongside each
+   * other. Ones that never share a single step — a train that terminates halfway
+   * and another that starts beyond it — can sit in the same lane, so the corridor
+   * is only as wide as the most trains ever running abreast, and a terminus is
+   * only as wide as it needs to be.
+   *
+   * Within that, a service keeps one lane for the whole chain, so nothing shuffles
+   * sideways when a neighbour ends.
+   */
+  const laneOf = new Map<string, Map<string, number>>();
+  for (const [root, ids] of chainMembers) {
+    const sorted = ids.slice().sort((a, b) => (rankOf.get(a) ?? 0) - (rankOf.get(b) ?? 0));
+    const lanes = new Map<string, number>();
+    for (const id of sorted) {
+      const mine = stepsOf.get(id) ?? new Set<string>();
+      const taken = new Set<number>();
+      for (const [other, lane] of lanes) {
+        const theirs = stepsOf.get(other) ?? new Set<string>();
+        let overlaps = false;
+        for (const k of mine) {
+          if (theirs.has(k)) {
+            overlaps = true;
+            break;
+          }
+        }
+        if (overlaps) taken.add(lane);
+      }
+      let lane = 0;
+      while (taken.has(lane)) lane += 1;
+      lanes.set(id, lane);
+    }
+    laneOf.set(root, lanes);
   }
 
   return {
     key: stepKey,
     members: (k) => members.get(k) ?? [],
     offset(k, id) {
-      const order = chainOrder.get(find(k)) ?? [];
-      const i = order.indexOf(id);
-      if (i < 0) return 0;
-      return i - (order.length - 1) / 2;
+      const lanes = laneOf.get(find(k));
+      if (!lanes) return 0;
+      const lane = lanes.get(id);
+      if (lane === undefined) return 0;
+      const width = Math.max(...lanes.values()) + 1;
+      return lane - (width - 1) / 2;
     },
   };
 }

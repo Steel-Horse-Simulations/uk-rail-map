@@ -37,6 +37,13 @@ export interface Station {
    */
   rotation?: number;
   rotationLocked?: boolean;
+  /** Name drawn flat, tilted up, or tilted down. */
+  labelAngle?: 0 | -45 | 45;
+  /**
+   * Which side of the line the tick sticks out, and with it the name. Applies to
+   * every service calling here, so a station reads as one thing.
+   */
+  tickSide?: 'left' | 'right';
   /** Which way the arm of a T-shaped interchange sticks out. */
   armSide?: 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
   /**
