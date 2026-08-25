@@ -6,6 +6,7 @@
 
 import type { Cell, MapDoc, Operator, Service, Station } from './model';
 import { nodeCell } from './model';
+import { outlineSvg } from './outline';
 import {
   buildLanes,
   lanePolyline,
@@ -62,18 +63,62 @@ function routeHasServices(doc: MapDoc, routeId: string): boolean {
   return Object.values(doc.services).some((s) => s.routeIds.includes(routeId));
 }
 
+/**
+ * The cells a service runs over.
+ *
+ * A service does not have to cover its routes end to end: fromStation and
+ * toStation cut it short, so a train can terminate halfway along the line and
+ * the drawn line stops there rather than running on to the buffers.
+ */
 function servicePath(doc: MapDoc, svc: Service): Cell[] {
-  const cells: Cell[] = [];
+  const nodes: { cell: Cell; station?: string }[] = [];
   for (const rid of svc.routeIds) {
     const route = doc.routes[rid];
     if (!route) continue;
     for (const node of route.path) {
-      const c = nodeCell(doc, node);
-      const last = cells[cells.length - 1];
-      if (!last || last.x !== c.x || last.y !== c.y) cells.push(c);
+      const cell = nodeCell(doc, node);
+      const last = nodes[nodes.length - 1];
+      if (last && last.cell.x === cell.x && last.cell.y === cell.y) continue;
+      nodes.push({ cell, station: node.kind === 'station' ? node.id : undefined });
     }
   }
-  return cells;
+
+  let start = 0;
+  let end = nodes.length - 1;
+  if (svc.fromStation) {
+    const i = nodes.findIndex((n) => n.station === svc.fromStation);
+    if (i >= 0) start = i;
+  }
+  if (svc.toStation) {
+    const i = nodes.map((n) => n.station).lastIndexOf(svc.toStation);
+    if (i >= 0) end = i;
+  }
+  if (start > end) [start, end] = [end, start];
+  return nodes.slice(start, end + 1).map((n) => n.cell);
+}
+
+/** The stations a service actually reaches, in order, after trimming. */
+export function serviceStations(doc: MapDoc, svc: Service): string[] {
+  const ids: string[] = [];
+  for (const rid of svc.routeIds) {
+    const route = doc.routes[rid];
+    if (!route) continue;
+    for (const node of route.path) {
+      if (node.kind === 'station' && !ids.includes(node.id)) ids.push(node.id);
+    }
+  }
+  let start = 0;
+  let end = ids.length - 1;
+  if (svc.fromStation) {
+    const i = ids.indexOf(svc.fromStation);
+    if (i >= 0) start = i;
+  }
+  if (svc.toStation) {
+    const i = ids.indexOf(svc.toStation);
+    if (i >= 0) end = i;
+  }
+  if (start > end) [start, end] = [end, start];
+  return ids.slice(start, end + 1);
 }
 
 function stepsFor(cells: Cell[]): Step[] {
@@ -88,6 +133,8 @@ export interface RenderOptions {
   theme?: Theme;
   /** base map SVG markup dropped in behind the network */
   basemap?: string;
+  /** the editable coastline, drawn behind everything */
+  outline?: import('./outline').Outline;
   /** extra layers behind the network (grid, towns) */
   underlays?: string;
   /** extra layers in front (drawing preview, selection) */
@@ -287,23 +334,60 @@ export function renderSvg(opts: RenderOptions): string {
       continue;
     }
 
-    // interchange: one bar per arm, snapped to 45 degrees, meeting at right angles
-    const arms = new Map<string, { pt: Pt; lane: number }[]>();
-    for (const d of calling) {
-      const h = d.hits.get(st.id)!;
-      const axis = Math.abs(h.dir.x) > Math.abs(h.dir.y) ? 'h' : 'v';
-      const list = arms.get(axis) ?? [];
-      list.push({ pt: h.pt, lane: h.lane });
-      arms.set(axis, list);
+    // Interchange marker.
+    //
+    // The body runs along the station's own axis — worked out from the lines
+    // through it, or fixed by hand. Services that terminate here get an arm
+    // that grows outward from the body rather than stretching it from the
+    // middle, so the station itself never shifts as more trains are added.
+    const centre = stationCentre(st, cs);
+    const axis = stationAxis(st, calling, cs);
+    const perp = { x: -axis.y, y: axis.x };
+
+    const through = calling.filter((d) => !terminatesHere(doc, d.service, st.id));
+    const ending = calling.filter((d) => terminatesHere(doc, d.service, st.id));
+
+    const along = (p: Pt) => (p.x - centre.x) * axis.x + (p.y - centre.y) * axis.y;
+
+    // half length of the body: enough for its cells and for every through line
+    let half = 0;
+    for (const c of st.cells) {
+      const p = toPx(c);
+      half = Math.max(half, Math.abs(along(p)));
     }
-    const bars: [Pt, Pt][] = [];
-    const extent = stationExtent(st, cs);
-    if (extent) bars.push(extent);
-    for (const [, list] of arms) {
-      list.sort((a, b) => a.lane - b.lane);
-      const [p, q] = snap45(list[0].pt, list[list.length - 1].pt);
-      bars.push([p, q]);
+    for (const d of through) half = Math.max(half, Math.abs(along(d.hits.get(st.id)!.pt)));
+
+    const bars: [Pt, Pt][] = [
+      [
+        { x: centre.x - axis.x * half, y: centre.y - axis.y * half },
+        { x: centre.x + axis.x * half, y: centre.y + axis.y * half },
+      ],
+    ];
+
+    if (ending.length) {
+      const side = st.armSide ? compass(st.armSide) : dominantSide(ending, centre, perp);
+      // how far out the terminating platforms sit, measured along the arm
+      let reach = 0;
+      for (const d of ending) {
+        const p = d.hits.get(st.id)!.pt;
+        reach = Math.max(reach, (p.x - centre.x) * side.x + (p.y - centre.y) * side.y);
+      }
+      // a chosen side is honoured even when nothing sticks out that way yet
+      if (st.armSide) reach = Math.max(reach, R * 2.4);
+      const root = { x: centre.x, y: centre.y };
+      const tip = { x: centre.x + side.x * reach, y: centre.y + side.y * reach };
+      if (reach > 1) bars.push([root, tip]);
+      // and the arm spans the terminating platforms across its own width
+      let spread = 0;
+      for (const d of ending) spread = Math.max(spread, Math.abs(along(d.hits.get(st.id)!.pt)));
+      if (spread > 1) {
+        bars.push([
+          { x: tip.x - axis.x * spread, y: tip.y - axis.y * spread },
+          { x: tip.x + axis.x * spread, y: tip.y + axis.y * spread },
+        ]);
+      }
     }
+
     // a non-stopping line through the middle: the blobs join beneath it
     if (passing.length && bars.length === 1) {
       const [p, q] = bars[0];
@@ -345,7 +429,7 @@ export function renderSvg(opts: RenderOptions): string {
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bounds.join(' ')}" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">`,
     defs,
-    opts.basemap ?? '',
+    opts.outline ? outlineSvg(opts.outline) : (opts.basemap ?? ''),
     opts.underlays ?? '',
     ...baseLines,
     ...under,
@@ -375,6 +459,64 @@ function stationExtent(st: Station, cs: number): [Pt, Pt] | null {
   }
   const [p, q] = snap45({ x: a.x * cs, y: a.y * cs }, { x: b.x * cs, y: b.y * cs });
   return [p, q];
+}
+
+const COMPASS: Record<string, Pt> = {
+  E: { x: 1, y: 0 },
+  SE: { x: Math.SQRT1_2, y: Math.SQRT1_2 },
+  S: { x: 0, y: 1 },
+  SW: { x: -Math.SQRT1_2, y: Math.SQRT1_2 },
+  W: { x: -1, y: 0 },
+  NW: { x: -Math.SQRT1_2, y: -Math.SQRT1_2 },
+  N: { x: 0, y: -1 },
+  NE: { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
+};
+
+function compass(dir: string): Pt {
+  return COMPASS[dir] ?? COMPASS.E;
+}
+
+function stationCentre(st: Station, cs: number): Pt {
+  const n = st.cells.length || 1;
+  return {
+    x: (st.cells.reduce((a, c) => a + c.x, 0) / n) * cs,
+    y: (st.cells.reduce((a, c) => a + c.y, 0) / n) * cs,
+  };
+}
+
+/** The station's own axis: fixed by hand if set, otherwise from its longest line. */
+function stationAxis(st: Station, calling: Drawn[], cs: number): Pt {
+  if (typeof st.rotation === 'number') {
+    const a = (st.rotation * Math.PI) / 4;
+    return { x: Math.cos(a), y: Math.sin(a) };
+  }
+  if (st.cells.length > 1) {
+    const a = st.cells[0];
+    const b = st.cells[st.cells.length - 1];
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+  }
+  void cs;
+  const d = calling[0]?.hits.values().next().value;
+  const dir = d?.dir ?? { x: 1, y: 0 };
+  // the bar sits across the line, not along it
+  return { x: -dir.y, y: dir.x };
+}
+
+/** Which side the terminating platforms mostly sit on, if no side was chosen. */
+function dominantSide(ending: Drawn[], centre: Pt, perp: Pt): Pt {
+  let sum = 0;
+  for (const d of ending) {
+    const p = [...d.hits.values()][0]?.pt ?? centre;
+    sum += (p.x - centre.x) * perp.x + (p.y - centre.y) * perp.y;
+  }
+  return sum >= 0 ? perp : { x: -perp.x, y: -perp.y };
+}
+
+/** Does this service finish at this station rather than run through it? */
+function terminatesHere(doc: MapDoc, svc: Service, stationId: string): boolean {
+  const ids = serviceStations(doc, svc);
+  return ids.length > 0 && (ids[0] === stationId || ids[ids.length - 1] === stationId);
 }
 
 function labelColour(

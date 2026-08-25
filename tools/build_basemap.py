@@ -1,197 +1,236 @@
-"""Block the coastline out on a coarse grid, the way the poster is drawn:
-decide land or sea per cell, then chamfer the coastal corners so staircases
-become clean 45-degree runs. Borders are shared cell edges, so they cannot gap."""
-import json, math
-from shapely.geometry import Polygon, box, Point
-from shapely.ops import unary_union
-from shapely.prepared import prep
+#!/usr/bin/env python3
+"""The UK and Ireland outline, drawn by hand.
 
-LAT0, K = 55.0, 5000.0
-LAT_MAX, LAT_MIN = 59.15, 49.75
-LON_MIN, LON_MAX = -11.2, 2.6
-PAD = 1050.0
-CELL = 750.0        # how coarsely the coast is blocked out; the whole idea
+Every corner below was chosen deliberately, in the idiom of the printed national
+rail maps: long straight runs, 45-degree diagonals, no attempt to follow the real
+coast bay for bay. One grid unit is roughly 20 km.
 
-COL = {"England": "#FFFFFF", "Scotland": "#C0D9F0", "Wales": "#F3CFCF",
-       "Northern Ireland": "#D6EFD2", "Ireland": "#BFE6C8", "France": "#EDEDED"}
+Countries share their border coordinates exactly — the same list is walked
+forwards by one country and backwards by its neighbour — so a border can never
+leave a gap or overlap.
+
+Edit the coordinate lists to reshape the map. Nothing here is derived from data.
+"""
+import math
+
+UNIT = 900.0          # map units per grid unit (about 20 km)
+PAD = 3.0             # grid units of sea around the edge
+
 SEA = "#E4F3F9"
-ORDER = ["England", "Scotland", "Wales", "Northern Ireland", "Ireland", "France"]
-
-def proj(lon, lat):
-    return (lon * math.cos(math.radians(LAT0)) * K, -lat * K)
-
-X0, _ = proj(LON_MIN, 0); X1, _ = proj(LON_MAX, 0)
-_, Y0 = proj(0, LAT_MAX); _, Y1 = proj(0, LAT_MIN)
-
-import sys
-# Natural Earth subunits, downloaded once from
-# https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_map_subunits.geojson
-SRC = sys.argv[1] if len(sys.argv) > 1 else "subunits.geojson"
-data = json.load(open(SRC))
-polys = {}
-for f in data["features"]:
-    su = f["properties"].get("SUBUNIT")
-    if su not in COL: continue
-    g = f["geometry"]
-    rings = g["coordinates"] if g["type"] == "MultiPolygon" else [g["coordinates"]]
-    ps = []
-    for r in rings:
-        pr = [proj(*p) for p in r[0]]
-        if len(pr) < 4: continue
-        pl = Polygon(pr)
-        if not pl.is_valid: pl = pl.buffer(0)
-        if not pl.is_empty: ps.append(pl)
-    if ps:
-        polys[su] = unary_union(ps)
-
-prepped = {su: prep(p) for su, p in polys.items()}
-
-cols = int((X1 - X0) / CELL) + 1
-rows = int((Y1 - Y0) / CELL) + 1
-label = {}
-for j in range(rows):
-    for i in range(cols):
-        cx = X0 + (i + 0.5) * CELL
-        cy = Y0 + (j + 0.5) * CELL
-        pt = Point(cx, cy)
-        for su in ORDER:
-            if su in prepped and prepped[su].contains(pt):
-                label[(i, j)] = su
-                break
-
-land = set(label)
-
-# ---------------------------------------------------------------- small islands
-# A cell is about 17 km across, so the Solent and the Menai Strait are a fraction
-# of one — Wight and Anglesey can never separate themselves at this coarseness.
-# They are placed instead: take the real footprint, then nudge it seaward by whole
-# cells until it stands clear of the mainland. The same thing a draughtsman does.
-FORCE = {
-    "Isle of Wight": ("England", (-1.62, -1.03, 50.55, 50.82)),
-    "Anglesey":      ("Wales",   (-4.80, -4.00, 53.10, 53.48)),
+COL = {
+    "England": "#FFFFFF",
+    "Scotland": "#C0D9F0",
+    "Wales": "#F3CFCF",
+    "Northern Ireland": "#D6EFD2",
+    "Ireland": "#BFE6C8",
+    "France": "#EDEDED",
+    "Skye": "#C0D9F0",
+    "Isle of Wight": "#FFFFFF",
+    "Anglesey": "#F3CFCF",
 }
 
-def footprint(lon0, lon1, lat0, lat1, owner):
-    """Cells the island really covers, by area rather than by centre point."""
-    from shapely.geometry import box as _box
-    x0, y1_ = proj(lon0, lat0)
-    x1_, y0_ = proj(lon1, lat1)
-    region = _box(min(x0, x1_), min(y0_, y1_), max(x0, x1_), max(y0_, y1_))
-    # take the island's own landmass, not whatever else the box overlaps —
-    # Anglesey's box catches a slice of mainland Wales otherwise
-    whole = polys[owner]
-    parts = list(whole.geoms) if whole.geom_type == "MultiPolygon" else [whole]
-    biggest = max(pl.area for pl in parts)
-    island = [pl for pl in parts
-              if pl.area < biggest * 0.3 and region.contains(pl.representative_point())]
-    if not island:
-        return set()
-    shape = unary_union(island).intersection(region)
-    if shape.is_empty:
-        return set()
-    cells = set()
-    i0 = int((min(x0, x1_) - X0) / CELL) - 1
-    i1 = int((max(x0, x1_) - X0) / CELL) + 1
-    j0 = int((min(y0_, y1_) - Y0) / CELL) - 1
-    j1 = int((max(y0_, y1_) - Y0) / CELL) + 1
-    for j in range(j0, j1 + 1):
-        for i in range(i0, i1 + 1):
-            cell = _box(X0 + i * CELL, Y0 + j * CELL, X0 + (i + 1) * CELL, Y0 + (j + 1) * CELL)
-            if shape.intersection(cell).area > cell.area * 0.18:
-                cells.add((i, j))
-    return cells
+# ---------------------------------------------------------------- the drawing
+# Each corner is a real place, chosen by hand. Between them the outline runs
+# straight or at 45 degrees, the way these maps are drawn. Move a place, or add
+# one, to reshape that stretch of coast.
+S = 5.55                    # grid units per degree of latitude (1 unit ~ 20 km)
+LAT0 = 55.0
 
-def clear_of_land(cells, mainland):
-    """No cell of the island may touch, even diagonally, a cell of the mainland."""
-    for i, j in cells:
-        for di in (-1, 0, 1):
-            for dj in (-1, 0, 1):
-                n = (i + di, j + dj)
-                if n not in cells and n in mainland:
-                    return False
-    return True
+def g(lat, lon):
+    return (round(lon * math.cos(math.radians(LAT0)) * S), round(-lat * S))
 
-FORCED_CELLS = set()
-for name, (owner, bbox) in FORCE.items():
-    cells = footprint(*bbox, owner)
-    if not cells:
-        print("  could not place", name)
-        continue
-    mainland = set(land)
-    for c in cells:
-        mainland.discard(c)
-    # try the smallest nudge that gets it clear, seaward first
-    offsets = sorted(
-        [(di, dj) for di in range(-3, 4) for dj in range(-3, 4)],
-        key=lambda o: (abs(o[0]) + abs(o[1]), -o[1], abs(o[0])),
-    )
-    placed = None
-    for di, dj in offsets:
-        moved = {(i + di, j + dj) for i, j in cells}
-        if moved & mainland:
-            continue
-        if clear_of_land(moved, mainland):
-            placed = moved
-            break
-    if placed is None:
-        print("  no clear spot for", name)
-        continue
-    for c in cells:
-        label.pop(c, None)
-    for c in placed:
-        label[c] = owner
-        FORCED_CELLS.add(c)
-    print(f"  {name}: {len(placed)} cells, nudged {di},{dj}")
+BORDER_SCOT_ENG = [g(54.99, -3.06), g(55.20, -2.40), g(55.60, -2.15), g(55.77, -2.00)]
 
-land = set(label)
-print("land cells:", len(land), f"grid {cols}x{rows}")
+COAST_SCOTLAND = [
+    g(55.77, -2.00),   # Berwick-upon-Tweed
+    g(56.00, -2.52),   # Dunbar
+    g(56.02, -3.70),   # the Forth, cutting west to Grangemouth
+    g(56.28, -2.60),   # Fife Ness
+    g(56.46, -2.97),   # Dundee, the Tay
+    g(56.56, -2.58),   # Arbroath
+    g(57.15, -2.09),   # Aberdeen
+    g(57.69, -2.00),   # Fraserburgh
+    g(57.67, -2.52),   # Banff
+    g(57.48, -4.23),   # Inverness, the Moray Firth
+    g(57.88, -4.03),   # Dornoch
+    g(58.44, -3.09),   # Wick
+    g(58.64, -3.02),   # Duncansby Head
+    g(58.60, -3.52),   # Thurso
+    g(58.62, -5.00),   # Cape Wrath
+    g(57.90, -5.16),   # Ullapool
+    g(57.72, -5.70),   # Gairloch
+    g(57.28, -5.72),   # Kyle of Lochalsh
+    g(56.82, -5.11),   # Fort William
+    g(56.41, -5.47),   # Oban
+    g(55.86, -5.42),   # Tarbert
+    g(55.31, -5.60),   # Mull of Kintyre
+    g(55.96, -4.82),   # Gourock, back up the Clyde
+    g(55.46, -4.63),   # Ayr
+    g(54.90, -5.03),   # Stranraer
+    g(54.99, -3.06),   # the Solway
+]
 
-def is_sea(i, j):
-    return (i, j) not in land
+COAST_ENGLAND_EAST = [
+    g(55.77, -2.00),   # Berwick-upon-Tweed
+    g(55.02, -1.42),   # Newcastle
+    g(54.58, -1.23),   # Middlesbrough
+    g(54.49, -0.61),   # Whitby
+    g(54.08, -0.19),   # Bridlington
+    g(53.74, -0.33),   # the Humber
+    g(53.57, -0.08),   # Grimsby
+    g(53.14, 0.34),    # Skegness
+    g(52.75, 0.40),    # the Wash
+    g(52.94, 0.49),    # Hunstanton
+    g(52.93, 1.30),    # Cromer
+    g(52.61, 1.73),    # Great Yarmouth
+    g(51.96, 1.35),    # Felixstowe
+    g(51.54, 0.71),    # Southend, the Thames
+    g(51.39, 1.38),    # Margate
+    g(51.13, 1.31),    # Dover
+    g(50.86, 0.57),    # Hastings
+    g(50.82, -0.14),   # Brighton
+    g(50.80, -1.09),   # Portsmouth
+    g(50.72, -1.88),   # Bournemouth
+    g(50.61, -2.46),   # Weymouth
+    g(50.62, -3.41),   # Exmouth
+    g(50.37, -4.14),   # Plymouth
+    g(50.07, -5.71),   # Land's End
+    g(50.41, -5.08),   # Newquay
+    g(50.83, -4.55),   # Bude
+    g(51.08, -4.06),   # Barnstaple
+    g(51.45, -2.59),   # Bristol, the Severn
+    g(51.64, -2.68),   # Chepstow
+]
 
-def rings_for(cells):
-    u = unary_union([box(X0 + i * CELL, Y0 + j * CELL,
-                         X0 + (i + 1) * CELL, Y0 + (j + 1) * CELL) for i, j in cells])
-    gs = list(u.geoms) if u.geom_type == "MultiPolygon" else [u]
-    return [(list(g.exterior.coords)[:-1], g.area) for g in gs]
+BORDER_WALES_ENG = [
+    g(51.64, -2.68),   # Chepstow
+    g(52.06, -3.00),   # the Marches
+    g(52.86, -3.06),   # Oswestry
+    g(53.20, -3.00),   # the Dee at Chester
+]
 
-def chamfer(ring):
-    """Cut half a cell off every corner that faces the sea. Consecutive cuts on a
-    one-cell staircase join up into a continuous 45-degree edge."""
-    n = len(ring)
+COAST_WALES = [
+    g(53.20, -3.00),   # the Dee
+    g(53.32, -3.83),   # Llandudno
+    g(53.14, -4.27),   # Caernarfon
+    g(52.79, -4.75),   # the Llyn peninsula
+    g(52.41, -4.08),   # Aberystwyth
+    g(52.08, -4.66),   # Cardigan
+    g(51.88, -5.27),   # St Davids
+    g(51.62, -3.94),   # Swansea
+    g(51.48, -3.18),   # Cardiff
+    g(51.64, -2.68),   # Chepstow
+]
+
+COAST_ENGLAND_NW = [
+    g(53.20, -3.00),   # the Dee
+    g(53.41, -3.00),   # Liverpool
+    g(53.82, -3.05),   # Blackpool
+    g(54.11, -3.23),   # Barrow
+    g(54.55, -3.59),   # Whitehaven
+    g(54.99, -3.06),   # the Solway
+]
+
+BORDER_IRELAND_NI = [
+    g(54.50, -8.19),   # Ballyshannon
+    g(54.30, -7.30),   # Fermanagh
+    g(54.05, -6.20),   # Carlingford Lough
+]
+
+COAST_NI = [
+    g(54.05, -6.20),   # Carlingford Lough
+    g(54.60, -5.93),   # Belfast
+    g(54.85, -5.82),   # Larne
+    g(55.20, -6.24),   # Ballycastle
+    g(55.20, -6.65),   # Portrush
+    g(55.00, -7.32),   # Derry
+    g(54.50, -8.19),   # Ballyshannon
+]
+
+COAST_IRELAND = [
+    g(54.50, -8.19),   # Ballyshannon
+    g(54.27, -8.48),   # Sligo
+    g(54.23, -9.99),   # Belmullet
+    g(53.49, -10.02),  # Clifden
+    g(53.27, -9.05),   # Galway
+    g(52.56, -9.93),   # Loop Head
+    g(52.14, -10.27),  # Dingle
+    g(51.88, -9.58),   # Kenmare
+    g(51.85, -8.30),   # Cork
+    g(52.15, -7.00),   # Waterford
+    g(52.25, -6.34),   # Rosslare
+    g(52.98, -6.04),   # Wicklow
+    g(53.35, -6.26),   # Dublin
+    g(54.05, -6.20),   # Carlingford Lough
+]
+
+def block(lat, lon, w, h):
+    x, y = g(lat, lon)
+    return [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+
+SKYE = block(57.55, -6.45, 2, 2)
+ANGLESEY = block(53.42, -4.65, 2, 1)
+WIGHT = block(50.62, -1.50, 2, 1)
+FRANCE = [g(51.10, 1.90), g(51.10, 3.40), g(49.20, 3.40), g(49.20, 0.40), g(49.90, 1.30)]
+
+# ---------------------------------------------------------------- assembly
+def rev(seq):
+    return list(reversed(seq))
+
+def join(*parts):
+    """Stitch runs together, dropping the duplicated joint between them."""
     out = []
-    for idx in range(n):
-        p0, p1, p2 = ring[idx - 1], ring[idx], ring[(idx + 1) % n]
-        i = int(round((p1[0] - X0) / CELL)); j = int(round((p1[1] - Y0) / CELL))
-        l1 = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
-        l2 = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
-        if l1 < 1e-9 or l2 < 1e-9:
-            out.append(p1); continue
-        cut = min(CELL / 2, l1 / 2, l2 / 2)
-        u1 = ((p1[0] - p0[0]) / l1, (p1[1] - p0[1]) / l1)
-        u2 = ((p2[0] - p1[0]) / l2, (p2[1] - p1[1]) / l2)
-        out.append((p1[0] - u1[0] * cut, p1[1] - u1[1] * cut))
-        out.append((p1[0] + u2[0] * cut, p1[1] + u2[1] * cut))
-    # drop points that now sit on a straight run
-    keep = []
-    m = len(out)
-    for idx in range(m):
-        a, b, c = out[idx - 1], out[idx], out[(idx + 1) % m]
-        v1 = (b[0] - a[0], b[1] - a[1]); v2 = (c[0] - b[0], c[1] - b[1])
-        l1 = math.hypot(*v1) or 1e-9; l2 = math.hypot(*v2) or 1e-9
-        if abs(v1[0] / l1 - v2[0] / l2) < 1e-9 and abs(v1[1] / l1 - v2[1] / l2) < 1e-9:
-            continue
-        keep.append(b)
-    return keep
+    for part in parts:
+        for p in part:
+            if not out or out[-1] != p:
+                out.append(p)
+    if len(out) > 1 and out[0] == out[-1]:
+        out.pop()
+    return out
 
-def path_d(ring, r=85.0):
+SHAPES = [
+    ("Scotland", join(COAST_SCOTLAND, rev(BORDER_SCOT_ENG))),
+    ("England", join(BORDER_SCOT_ENG, COAST_ENGLAND_EAST, rev(BORDER_WALES_ENG), COAST_ENGLAND_NW)),
+    ("Wales", join(BORDER_WALES_ENG, COAST_WALES)),
+    ("Northern Ireland", join(COAST_NI, rev(BORDER_IRELAND_NI))),
+    ("Ireland", join(BORDER_IRELAND_NI, COAST_IRELAND)),
+    ("France", FRANCE),
+    ("Skye", SKYE),
+    ("Anglesey", ANGLESEY),
+    ("Isle of Wight", WIGHT),
+]
+
+def legalise(ring):
+    """Every edge must be horizontal, vertical or exactly diagonal. Where a hand
+    coordinate is not, insert the corner that makes it so: straight run first,
+    then the diagonal."""
+    out = []
     n = len(ring)
+    for i in range(n):
+        a = ring[i]
+        b = ring[(i + 1) % n]
+        out.append(a)
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        if dx == 0 or dy == 0 or abs(dx) == abs(dy):
+            continue
+        m = min(abs(dx), abs(dy))
+        sx = (dx > 0) - (dx < 0)
+        sy = (dy > 0) - (dy < 0)
+        if abs(dx) > abs(dy):
+            out.append((b[0] - sx * m, a[1]))
+        else:
+            out.append((a[0], b[1] - sy * m))
+    return out
+
+def path_d(ring, r=0.28):
+    pts = [(x * UNIT, y * UNIT) for x, y in ring]
+    n = len(pts)
     d = []
-    for idx in range(n):
-        p0, p1, p2 = ring[idx - 1], ring[idx], ring[(idx + 1) % n]
+    for i in range(n):
+        p0, p1, p2 = pts[i - 1], pts[i], pts[(i + 1) % n]
         l1 = math.hypot(p1[0] - p0[0], p1[1] - p0[1]) or 1e-9
         l2 = math.hypot(p2[0] - p1[0], p2[1] - p1[1]) or 1e-9
-        rr = min(r, l1 / 2, l2 / 2)
+        rr = min(r * UNIT, l1 / 2, l2 / 2)
         u1 = ((p1[0] - p0[0]) / l1, (p1[1] - p0[1]) / l1)
         u2 = ((p2[0] - p1[0]) / l2, (p2[1] - p1[1]) / l2)
         a = (p1[0] - u1[0] * rr, p1[1] - u1[1] * rr)
@@ -200,45 +239,69 @@ def path_d(ring, r=85.0):
                  + f" Q {p1[0]:.1f} {p1[1]:.1f} {b[0]:.1f} {b[1]:.1f}")
     return " ".join(d) + " Z"
 
-W = X1 - X0 + PAD * 2
-H = Y1 - Y0 + PAD * 2
+xs = [x for _, ring in SHAPES for x, _ in ring]
+ys = [y for _, ring in SHAPES for _, y in ring]
+MINX, MAXX = min(xs) - PAD, max(xs) + PAD
+MINY, MAXY = min(ys) - PAD, max(ys) + PAD
+W = (MAXX - MINX) * UNIT
+H = (MAXY - MINY) * UNIT
+
 out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W:.0f}" height="{H:.0f}" '
        f'viewBox="0 0 {W:.0f} {H:.0f}">',
        f'<rect width="{W:.0f}" height="{H:.0f}" fill="{SEA}"/>',
-       f'<g transform="translate({PAD - X0:.1f},{PAD - Y0:.1f})">']
-
-ISLANDS = {   # name: (lon0, lon1, lat0, lat1)
-    "Skye":          (-6.90, -5.65, 57.00, 57.75),
-    "Anglesey":      (-4.80, -4.00, 53.10, 53.48),
-    "Isle of Wight": (-1.62, -1.03, 50.55, 50.82),
-}
-KEEP_BOXES = []
-for a0, a1, b0, b1 in ISLANDS.values():
-    x0, y1_ = proj(a0, b0)
-    x1_, y0_ = proj(a1, b1)
-    KEEP_BOXES.append((min(x0, x1_), max(x0, x1_), min(y0_, y1_), max(y0_, y1_)))
-
-def wanted(ring, area, biggest):
-    if area >= biggest * 0.5:
-        return True                      # the mainland itself
-    cx = sum(p[0] for p in ring) / len(ring)
-    cy = sum(p[1] for p in ring) / len(ring)
-    cell = (int((cx - X0) / CELL), int((cy - Y0) / CELL))
-    if cell in FORCED_CELLS:
-        return True                      # an island we placed deliberately
-    return any(x0 <= cx <= x1_ and y0_ <= cy <= y1_ for x0, x1_, y0_, y1_ in KEEP_BOXES)
-
-n = 0
-for su in ORDER:
-    cells = [c for c, s in label.items() if s == su]
-    if not cells: continue
-    parts = rings_for(cells)
-    biggest = max(a for _, a in parts)
-    for ring, area in parts:
-        if not wanted(ring, area, biggest): continue
-        out.append(f'<path d="{path_d(chamfer(ring))}" fill="{COL[su]}" '
-                   f'stroke="{COL[su]}" stroke-width="275" stroke-linejoin="round"/>')
-        n += 1
+       f'<g transform="translate({-MINX * UNIT:.1f},{-MINY * UNIT:.1f})">']
+for name, ring in SHAPES:
+    out.append(f'<path d="{path_d(legalise(ring))}" fill="{COL[name]}"/>')
 out.append("</g></svg>")
+
 open("assets/uk-base.svg", "w").write("\n".join(out))
-print("shapes:", n, "size", round(W), round(H))
+
+# ---------------------------------------------------------------- editable form
+# The app edits the outline directly, so write it out as data too: rings of grid
+# points, with the border points pinned between neighbouring countries so moving
+# one moves both.
+import json as _json
+
+RINGS = {name: legalise(ring) for name, ring in SHAPES}
+
+def pin(a_name, b_name, run):
+    """Mark the points of `run` as shared between two countries."""
+    out = []
+    for pt in run:
+        ia = RINGS[a_name].index(pt) if pt in RINGS[a_name] else None
+        ib = RINGS[b_name].index(pt) if pt in RINGS[b_name] else None
+        if ia is not None and ib is not None:
+            out.append((ia, ib))
+    return out
+
+shapes = []
+for name, ring in SHAPES:
+    shapes.append({
+        "id": name.lower().replace(" ", "-"),
+        "name": name,
+        "fill": COL[name],
+        "ring": [{"x": x, "y": y} for x, y in RINGS[name]],
+        "shared": {},
+    })
+
+by_name = {s["name"]: s for s in shapes}
+for a_name, b_name, run in (
+    ("Scotland", "England", BORDER_SCOT_ENG),
+    ("Wales", "England", BORDER_WALES_ENG),
+    ("Northern Ireland", "Ireland", BORDER_IRELAND_NI),
+):
+    for ia, ib in pin(a_name, b_name, legalise(list(run)) if False else list(run)):
+        by_name[a_name]["shared"][str(ia)] = f'{by_name[b_name]["id"]}:{ib}'
+        by_name[b_name]["shared"][str(ib)] = f'{by_name[a_name]["id"]}:{ia}'
+
+_json.dump({"unit": UNIT, "radius": 0.28, "shapes": shapes},
+           open("assets/outline.json", "w"), indent=1)
+print("  border points pinned:",
+      sum(len(s["shared"]) for s in shapes) // 2)
+
+# the towns overlay has to sit in exactly this coordinate space
+import json as _json
+_json.dump({"unit": UNIT, "scale": S, "lat0": LAT0, "minx": MINX, "miny": MINY},
+           open("assets/projection.json", "w"), indent=2)
+print(f"hand-drawn outline: {len(SHAPES)} shapes, {round(W)} x {round(H)} units, "
+      f"origin at grid ({MINX}, {MINY})")

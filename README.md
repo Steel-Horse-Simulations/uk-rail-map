@@ -46,7 +46,8 @@ src/core/geometry.ts    octilinear steps, lane assignment, corner rounding
 src/core/render.ts      SVG output — also used for export and, later, the web build
 src/main/               Electron main process, file dialogs, PDF export, updates
 src/renderer/           the editor window
-assets/uk-base.svg      generated coastline
+assets/outline.json     the coastline as editable data (the app's starting point)
+assets/uk-base.svg      the same outline as a flat picture, for reference
 tools/build_basemap.py  regenerates that coastline from Natural Earth data
                         (needs `pip install shapely`)
 tools/build_places.py   regenerates the towns overlay
@@ -54,3 +55,14 @@ tools/build_places.py   regenerates the towns overlay
 
 `src/core` deliberately has no DOM or Electron dependencies, so the same
 rendering code can be reused on the web later.
+
+## The coastline
+
+It is drawn by hand: every corner is a named place, and the runs between them are
+straight or at 45 degrees. `tools/build_basemap.py` holds the coordinates and
+writes `assets/outline.json`.
+
+You do not need to touch that file to change the map. Pick the **Coast** tool in
+the app and drag the handles: points move on a 20 km grid, edges stay on 90 and
+45 degrees, and the shape saves with your project. Border points are shared
+between neighbouring countries, so moving one moves both and no gap can open.

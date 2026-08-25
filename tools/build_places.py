@@ -1,32 +1,15 @@
 #!/usr/bin/env python3
 """Build the towns-and-cities overlay.
 
-Projects every settlement in the UK, Ireland and the Isle of Man into the same
-pixel space as assets/uk-base.svg, so the dots land where they belong on the
-coastline. Tiers let the editor thin the layer out as you zoom away.
+Reads assets/projection.json so the dots land in exactly the same coordinate
+space as the hand-drawn outline. Run build_basemap.py first.
 
-Requires shapely (pip install shapely).
 Source: geonames cities500 (every place of 500 people or more).
-Run from the project root:  python tools/build_places.py path/to/cities500.json
+    python tools/build_places.py path/to/cities500.json
 """
 import json
 import math
 import sys
-
-# these must match tools/build_basemap.py exactly
-LAT0 = 55.0
-K = 5000.0
-LAT_MAX, LAT_MIN = 59.15, 49.75
-LON_MIN, LON_MAX = -11.2, 2.6
-PAD = 1050.0
-
-
-def proj(lon, lat):
-    return (lon * math.cos(math.radians(LAT0)) * K, -lat * K)
-
-
-X0, _ = proj(LON_MIN, 0)
-_, Y0 = proj(0, LAT_MAX)
 
 
 def tier(pop):
@@ -40,6 +23,11 @@ def tier(pop):
 
 
 def main(src, out="assets/places.json"):
+    pr = json.load(open("assets/projection.json"))
+    unit, scale, lat0 = pr["unit"], pr["scale"], pr["lat0"]
+    minx, miny = pr["minx"], pr["miny"]
+    k = math.cos(math.radians(lat0)) * scale
+
     data = json.load(open(src, encoding="utf-8"))
     places = []
     for c in data:
@@ -51,18 +39,16 @@ def main(src, out="assets/places.json"):
             pop = int(c.get("pop") or 0)
         except (TypeError, ValueError):
             continue
-        if not (LAT_MIN <= lat <= LAT_MAX and LON_MIN <= lon <= LON_MAX):
+        if not (49.5 <= lat <= 59.5 and -11.5 <= lon <= 2.6):
             continue
-        x, y = proj(lon, lat)
         places.append({
             "n": c["name"],
-            "x": round(x - X0 + PAD, 1),
-            "y": round(y - Y0 + PAD, 1),
+            "x": round((lon * k - minx) * unit, 1),
+            "y": round((-lat * scale - miny) * unit, 1),
             "p": pop,
             "t": tier(pop),
         })
 
-    # biggest first, so a truncated read still gets the important ones
     places.sort(key=lambda p: -p["p"])
     json.dump({"places": places}, open(out, "w", encoding="utf-8"), separators=(",", ":"))
     by_tier = {}

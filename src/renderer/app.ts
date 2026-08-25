@@ -12,9 +12,15 @@ import {
   type Service,
   type Station,
 } from '../core/model';
-import { renderSvg } from '../core/render';
-import { elbow, isOctilinear, snapOctilinear } from '../core/geometry';
-import { BASEMAP_H, BASEMAP_SVG, BASEMAP_W, PLACES } from '../generated/assets';
+import { renderSvg, serviceStations } from '../core/render';
+import { elbow, isOctilinear, snapOctilinear, unitSteps } from '../core/geometry';
+import { BASEMAP_H, BASEMAP_W, OUTLINE, PLACES } from '../generated/assets';
+import {
+  deletePoint,
+  insertPoint,
+  movePoint,
+  type Outline,
+} from '../core/outline';
 
 /** A town or city from the overlay: name, position, population, tier. */
 export interface Place {
@@ -43,13 +49,18 @@ declare global {
   }
 }
 
-type Tool = 'select' | 'station' | 'route' | 'pan';
+type Tool = 'select' | 'station' | 'route' | 'redit' | 'pan' | 'coast';
 
 const state = {
   project: emptyProject('UK network'),
   filePath: undefined as string | undefined,
-  basemap: '',
   places: [] as Place[],
+  /** which coastline point is being dragged, if any */
+  coastDrag: undefined as { shapeId: string; index: number } | undefined,
+  coastPick: undefined as { shapeId: string; index: number } | undefined,
+  /** which node of the route being edited is picked or dragged */
+  nodePick: undefined as number | undefined,
+  nodeDrag: undefined as number | undefined,
   tool: 'station' as Tool,
   zoom: 0.025,
   pan: { x: 0, y: 0 },
@@ -183,6 +194,172 @@ function buildPath(ids: string[], flips: boolean[]) {
   return path;
 }
 
+/** Handles on every coastline point, shown only while the Coast tool is active. */
+function coastLayer(): string {
+  if (state.tool !== 'coast' || !state.project.outline) return '';
+  const o = state.project.outline;
+  const k = 1 / state.zoom;
+  const out: string[] = [];
+  for (const shape of o.shapes) {
+    const pts = shape.ring.map((p) => ({ x: p.x * o.unit, y: p.y * o.unit }));
+    // the ring as drawn, so you can see what you are moving
+    out.push(
+      `<path d="${pts.map((p, i) => `${i ? 'L' : 'M'} ${p.x} ${p.y}`).join(' ')} Z" ` +
+        `fill="none" stroke="#E8930C" stroke-width="${2 * k}" stroke-dasharray="${9 * k} ${7 * k}"/>`,
+    );
+    pts.forEach((p, i) => {
+      const picked =
+        state.coastPick && state.coastPick.shapeId === shape.id && state.coastPick.index === i;
+      const pinned = Boolean(shape.shared?.[i]);
+      const r = (picked ? 9 : 6) * k;
+      out.push(
+        `<rect x="${p.x - r}" y="${p.y - r}" width="${2 * r}" height="${2 * r}" ` +
+          `fill="${picked ? '#E8930C' : '#ffffff'}" stroke="${pinned ? '#8A6BC4' : '#141C24'}" ` +
+          `stroke-width="${2 * k}"/>`,
+      );
+    });
+  }
+  return out.join('');
+}
+
+/** The coastline point under the pointer, if any. */
+function coastPointAt(ev: MouseEvent): { shapeId: string; index: number } | undefined {
+  const o = state.project.outline;
+  if (!o) return undefined;
+  const m = screenToMap(ev);
+  const reach = 12 / state.zoom;
+  let best: { shapeId: string; index: number } | undefined;
+  let bestD = reach;
+  for (const shape of o.shapes) {
+    shape.ring.forEach((p, i) => {
+      const d = Math.hypot(p.x * o.unit - m.x, p.y * o.unit - m.y);
+      if (d < bestD) {
+        bestD = d;
+        best = { shapeId: shape.id, index: i };
+      }
+    });
+  }
+  return best;
+}
+
+/** The edge under the pointer, for inserting a new point into. */
+function coastEdgeAt(ev: MouseEvent): { shapeId: string; index: number } | undefined {
+  const o = state.project.outline;
+  if (!o) return undefined;
+  const m = screenToMap(ev);
+  const reach = 10 / state.zoom;
+  let best: { shapeId: string; index: number } | undefined;
+  let bestD = reach;
+  for (const shape of o.shapes) {
+    const n = shape.ring.length;
+    for (let i = 0; i < n; i++) {
+      const a = shape.ring[i];
+      const b = shape.ring[(i + 1) % n];
+      const ax = a.x * o.unit;
+      const ay = a.y * o.unit;
+      const bx = b.x * o.unit;
+      const by = b.y * o.unit;
+      const vx = bx - ax;
+      const vy = by - ay;
+      const len2 = vx * vx + vy * vy || 1;
+      let t = ((m.x - ax) * vx + (m.y - ay) * vy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(m.x - (ax + vx * t), m.y - (ay + vy * t));
+      if (d < bestD) {
+        bestD = d;
+        best = { shapeId: shape.id, index: i };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Handles on the selected route: circles for stations, squares for the plain
+ * bends between them. Bends are what give a route its shape, so they need to be
+ * as editable as the stations are.
+ */
+function routeEditLayer(): string {
+  if (state.tool !== 'redit' || !state.selectedRoute) return '';
+  const d = doc();
+  const rt = d.routes[state.selectedRoute];
+  if (!rt) return '';
+  const cs = d.cellSize;
+  const k = 1 / state.zoom;
+  const out: string[] = [];
+  const pts = rt.path.map((n) => (n.kind === 'bend' ? n.at : d.stations[n.id]?.cells[0]));
+  out.push(
+    `<path d="${pts.filter(Boolean).map((c, i) => `${i ? 'L' : 'M'} ${c!.x * cs} ${c!.y * cs}`).join(' ')}" ` +
+      `fill="none" stroke="#E8930C" stroke-width="${2.4 * k}" stroke-dasharray="${9 * k} ${7 * k}"/>`,
+  );
+  pts.forEach((c, i) => {
+    if (!c) return;
+    const picked = state.nodePick === i;
+    const bend = rt.path[i].kind === 'bend';
+    const r = (picked ? 8 : 6) * k;
+    const x = c.x * cs;
+    const y = c.y * cs;
+    out.push(
+      bend
+        ? `<rect x="${x - r}" y="${y - r}" width="${2 * r}" height="${2 * r}" fill="${picked ? '#E8930C' : '#ffffff'}" stroke="#141C24" stroke-width="${2 * k}"/>`
+        : `<circle cx="${x}" cy="${y}" r="${r}" fill="${picked ? '#E8930C' : '#ffffff'}" stroke="#0A55C4" stroke-width="${2.2 * k}"/>`,
+    );
+  });
+  return out.join('');
+}
+
+/** Which node of the selected route is under the pointer. */
+function routeNodeAt(ev: MouseEvent): number | undefined {
+  if (!state.selectedRoute) return undefined;
+  const d = doc();
+  const rt = d.routes[state.selectedRoute];
+  if (!rt) return undefined;
+  const m = screenToMap(ev);
+  const reach = 12 / state.zoom;
+  let best: number | undefined;
+  let bestD = reach;
+  rt.path.forEach((n, i) => {
+    const c = n.kind === 'bend' ? n.at : d.stations[n.id]?.cells[0];
+    if (!c) return;
+    const dist = Math.hypot(c.x * d.cellSize - m.x, c.y * d.cellSize - m.y);
+    if (dist < bestD) {
+      bestD = dist;
+      best = i;
+    }
+  });
+  return best;
+}
+
+/** Which leg of the selected route is under the pointer, for adding a bend. */
+function routeEdgeAt(ev: MouseEvent): number | undefined {
+  if (!state.selectedRoute) return undefined;
+  const d = doc();
+  const rt = d.routes[state.selectedRoute];
+  if (!rt) return undefined;
+  const m = screenToMap(ev);
+  const cs = d.cellSize;
+  let best: number | undefined;
+  let bestD = 10 / state.zoom;
+  for (let i = 0; i + 1 < rt.path.length; i++) {
+    const a = rt.path[i].kind === 'bend' ? (rt.path[i] as { at: Cell }).at : d.stations[(rt.path[i] as { id: string }).id]?.cells[0];
+    const b = rt.path[i + 1].kind === 'bend' ? (rt.path[i + 1] as { at: Cell }).at : d.stations[(rt.path[i + 1] as { id: string }).id]?.cells[0];
+    if (!a || !b) continue;
+    const ax = a.x * cs;
+    const ay = a.y * cs;
+    const vx = b.x * cs - ax;
+    const vy = b.y * cs - ay;
+    const len2 = vx * vx + vy * vy || 1;
+    let t = ((m.x - ax) * vx + (m.y - ay) * vy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const dist = Math.hypot(m.x - (ax + vx * t), m.y - (ay + vy * t));
+    if (dist < bestD) {
+      bestD = dist;
+      best = i;
+    }
+  }
+  return best;
+}
+
 function previewLayer(): string {
   if (state.tool !== 'route' || state.drawing.length === 0) return '';
   const cs = doc().cellSize;
@@ -217,9 +394,9 @@ function draw() {
     svg = renderSvg({
       doc: d,
       operators: state.project.operators,
-      basemap: state.basemap,
+      outline: state.project.outline,
       underlays: gridLayer() + townsLayer(),
-      overlays: previewLayer() + selectionLayer(),
+      overlays: previewLayer() + selectionLayer() + coastLayer() + routeEditLayer(),
     });
   } catch (err) {
     setMessage(`Could not draw: ${String(err)}`);
@@ -286,6 +463,7 @@ function renderPanels() {
 }
 
 function renderInspector() {
+  if (state.tool === 'coast') return renderCoastInspector();
   if (state.focus === 'route') return renderRouteInspector();
   if (state.focus === 'service') return renderServiceInspector();
   const insp = $('#inspector');
@@ -309,6 +487,20 @@ function renderInspector() {
     </div>
     <label class="f">Occupies ${st.cells.length} cell${st.cells.length > 1 ? 's' : ''}</label>
     <p class="hint">${st.cells.map((c) => `${c.x},${c.y}`).join(' &nbsp; ')}</p>
+    <label class="f">Orientation ${st.rotationLocked ? '· locked' : typeof st.rotation === 'number' ? '· set by hand' : '· automatic'}</label>
+    <div class="rowbtns">
+      <button class="mini" id="rotl" title="Rotate 45 degrees anticlockwise">&#8630; 45&deg;</button>
+      <button class="mini" id="rotr" title="Rotate 45 degrees clockwise">45&deg; &#8631;</button>
+      <button class="mini" id="rotauto" title="Back to working it out from the lines">Auto</button>
+    </div>
+    <div class="check">Lock rotation<input id="rlock" type="checkbox" ${st.rotationLocked ? 'checked' : ''}></div>
+    <label class="f">Arm of the T points</label>
+    <select id="arm">
+      <option value="">automatic</option>
+      ${['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+        .map((k) => `<option value="${k}" ${st.armSide === k ? 'selected' : ''}>${k}</option>`)
+        .join('')}
+    </select>
     <div class="check">Interchange<input id="ic" type="checkbox" ${st.interchange ? 'checked' : ''}></div>
     <div class="check">Airport<input id="ap" type="checkbox" ${st.airport ? 'checked' : ''}></div>
     <div class="check">Proposed or closed<input id="pr" type="checkbox" ${st.proposed ? 'checked' : ''}></div>
@@ -332,6 +524,35 @@ function renderInspector() {
       renderPanels();
     };
   });
+
+  const rotate = (by: number) => () => {
+    if (st.rotationLocked) {
+      setMessage('Rotation is locked for this station.');
+      return;
+    }
+    st.rotation = (((st.rotation ?? 0) + by) % 8 + 8) % 8;
+    draw();
+    renderPanels();
+  };
+  ($('#rotl') as HTMLButtonElement).onclick = rotate(-1);
+  ($('#rotr') as HTMLButtonElement).onclick = rotate(1);
+  ($('#rotauto') as HTMLButtonElement).onclick = () => {
+    st.rotation = undefined;
+    st.rotationLocked = false;
+    draw();
+    renderPanels();
+  };
+  ($('#rlock') as HTMLInputElement).onchange = (e) => {
+    st.rotationLocked = (e.target as HTMLInputElement).checked;
+    // locking keeps whatever it is showing now, rather than leaving it to drift
+    if (st.rotationLocked && typeof st.rotation !== 'number') st.rotation = 0;
+    renderPanels();
+  };
+  ($('#arm') as HTMLSelectElement).onchange = (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    st.armSide = (v || undefined) as Station['armSide'];
+    draw();
+  };
 
   const bind = (sel: string, key: 'interchange' | 'airport' | 'proposed' | 'locked') => {
     ($(sel) as HTMLInputElement).onchange = (e) => {
@@ -382,6 +603,305 @@ function renderInspector() {
 }
 
 
+
+// ---------------------------------------------------------------- infill
+/**
+ * Spread stations evenly along one leg of a route.
+ *
+ * The positions come from walking the actual drawn path between the two anchor
+ * stations, so a leg with bends in it spaces correctly rather than by straight
+ * line. Each position is nudged to the nearest cell, and off any bend, since a
+ * station must sit on a straight run.
+ */
+function legCells(routeId: string, aId: string, bId: string): Cell[] | null {
+  const d = doc();
+  const rt = d.routes[routeId];
+  if (!rt) return null;
+  const idxA = rt.path.findIndex((n) => n.kind === 'station' && n.id === aId);
+  const idxB = rt.path.findIndex((n) => n.kind === 'station' && n.id === bId);
+  if (idxA < 0 || idxB < 0) return null;
+  const [lo, hi] = idxA < idxB ? [idxA, idxB] : [idxB, idxA];
+  const anchors = rt.path.slice(lo, hi + 1).map((n) => (n.kind === 'bend' ? n.at : d.stations[n.id].cells[0]));
+  const cells: Cell[] = [anchors[0]];
+  for (let i = 0; i + 1 < anchors.length; i++) {
+    for (const st of unitSteps(anchors[i], anchors[i + 1])) cells.push(st.b);
+  }
+  return cells;
+}
+
+/** Cells where the path changes direction — no station may sit on one. */
+function bendCells(cells: Cell[]): Set<string> {
+  const out = new Set<string>();
+  for (let i = 1; i + 1 < cells.length; i++) {
+    const a = cells[i - 1];
+    const b = cells[i];
+    const c = cells[i + 1];
+    if (b.x - a.x !== c.x - b.x || b.y - a.y !== c.y - b.y) out.add(`${b.x},${b.y}`);
+  }
+  return out;
+}
+
+function spreadAlong(routeId: string, aId: string, bId: string, names: string[]): string[] {
+  const d = doc();
+  const cells = legCells(routeId, aId, bId);
+  if (!cells || cells.length < 3 || names.length === 0) return [];
+  const bends = bendCells(cells);
+  const taken = new Set<string>();
+  for (const st of Object.values(d.stations)) {
+    for (const c of st.cells) taken.add(`${c.x},${c.y}`);
+  }
+
+  const made: string[] = [];
+  names.forEach((name, i) => {
+    const ideal = ((i + 1) / (names.length + 1)) * (cells.length - 1);
+    // nearest free cell that is not a bend and not an anchor
+    let best: Cell | undefined;
+    let bestD = Infinity;
+    for (let j = 1; j < cells.length - 1; j++) {
+      const c = cells[j];
+      const key = `${c.x},${c.y}`;
+      if (bends.has(key) || taken.has(key)) continue;
+      const dist = Math.abs(j - ideal);
+      if (dist < bestD) {
+        bestD = dist;
+        best = c;
+      }
+    }
+    if (!best) return;
+    taken.add(`${best.x},${best.y}`);
+    const st: Station = {
+      id: newId('st'),
+      name: name.trim() || 'New station',
+      cells: [best],
+      kind: 'stop',
+      interchange: false,
+      spacing: { routeId, anchorA: aId, anchorB: bId },
+    };
+    d.stations[st.id] = st;
+    made.push(st.id);
+  });
+
+  // slot them into the route in path order
+  const rt = d.routes[routeId];
+  const order = new Map(cells.map((c, i) => [`${c.x},${c.y}`, i]));
+  const idxA = rt.path.findIndex((n) => n.kind === 'station' && n.id === aId);
+  const idxB = rt.path.findIndex((n) => n.kind === 'station' && n.id === bId);
+  const at = Math.min(idxA, idxB) + 1;
+  const sorted = made
+    .slice()
+    .sort((p, q) => (order.get(`${d.stations[p].cells[0].x},${d.stations[p].cells[0].y}`) ?? 0)
+      - (order.get(`${d.stations[q].cells[0].x},${d.stations[q].cells[0].y}`) ?? 0));
+  rt.path.splice(at, 0, ...sorted.map((id) => ({ kind: 'station' as const, id })));
+  return made;
+}
+
+/** After an anchor moves, lay its evenly-spaced neighbours out again. */
+function respreadAround(stationId: string) {
+  const d = doc();
+  const groups = new Map<string, { routeId: string; a: string; b: string; ids: string[] }>();
+  for (const st of Object.values(d.stations)) {
+    const sp = st.spacing;
+    if (!sp) continue;
+    if (sp.anchorA !== stationId && sp.anchorB !== stationId) continue;
+    const key = `${sp.routeId}|${sp.anchorA}|${sp.anchorB}`;
+    const g = groups.get(key) ?? { routeId: sp.routeId, a: sp.anchorA, b: sp.anchorB, ids: [] };
+    g.ids.push(st.id);
+    groups.set(key, g);
+  }
+  for (const g of groups.values()) {
+    const cells = legCells(g.routeId, g.a, g.b);
+    if (!cells || cells.length < 3) continue;
+    const bends = bendCells(cells);
+    const rt = d.routes[g.routeId];
+    const inOrder = rt.path
+      .filter((n) => n.kind === 'station' && g.ids.includes(n.id))
+      .map((n) => (n as { id: string }).id);
+    const taken = new Set<string>();
+    for (const st of Object.values(d.stations)) {
+      if (g.ids.includes(st.id)) continue;
+      for (const c of st.cells) taken.add(`${c.x},${c.y}`);
+    }
+    inOrder.forEach((id, i) => {
+      const ideal = ((i + 1) / (inOrder.length + 1)) * (cells.length - 1);
+      let best: Cell | undefined;
+      let bestD = Infinity;
+      for (let j = 1; j < cells.length - 1; j++) {
+        const c = cells[j];
+        const key = `${c.x},${c.y}`;
+        if (bends.has(key) || taken.has(key)) continue;
+        const dist = Math.abs(j - ideal);
+        if (dist < bestD) {
+          bestD = dist;
+          best = c;
+        }
+      }
+      if (!best) return;
+      taken.add(`${best.x},${best.y}`);
+      d.stations[id].cells = [best];
+    });
+  }
+}
+
+let infillNames: string[] = [''];
+
+function openInfill() {
+  const d = doc();
+  const rt = state.selectedRoute ? d.routes[state.selectedRoute] : undefined;
+  if (!rt) {
+    setMessage('Select a route first.');
+    return;
+  }
+  const stations = routeStations(rt.id);
+  if (stations.length < 2) {
+    setMessage('The route needs two stations before anything can go between them.');
+    return;
+  }
+  const legs: [string, string][] = [];
+  for (let i = 0; i + 1 < stations.length; i++) legs.push([stations[i], stations[i + 1]]);
+
+  const body = $('#dialog-body');
+  const render = () => {
+    body.innerHTML = `
+      <h3>Add stations along ${esc(rt.name)}</h3>
+      <p class="lede">They will be spread evenly between the two you pick, nudged onto the grid and
+      kept off any bend. Move one afterwards and it stays where you put it — until you move an end
+      station, which spreads them again.</p>
+      <label class="f">Between</label>
+      <select id="ifleg">
+        ${legs
+          .map(([a, b], i) => `<option value="${i}">${esc(d.stations[a]?.name ?? a)} &rarr; ${esc(d.stations[b]?.name ?? b)}</option>`)
+          .join('')}
+      </select>
+      <label class="f">Stations, in order</label>
+      <div id="ifrows">
+        ${infillNames
+          .map(
+            (n, i) => `<div class="oprow" style="padding:6px 8px">
+              <input type="text" data-i="${i}" value="${esc(n)}" placeholder="Station name" style="flex:1">
+              <button class="btn" data-up="${i}">&uarr;</button>
+              <button class="btn" data-down="${i}">&darr;</button>
+              <button class="btn" data-rm="${i}">&times;</button>
+            </div>`,
+          )
+          .join('')}
+      </div>
+      <button class="mini" id="ifadd">Add another station</button>
+      <div class="actions">
+        <button class="btn" id="ifcancel">Cancel</button>
+        <button class="btn p" id="ifok">Place ${infillNames.filter((n) => n.trim()).length} stations</button>
+      </div>
+    `;
+    body.querySelectorAll('input[data-i]').forEach((el) => {
+      (el as HTMLInputElement).oninput = () => {
+        infillNames[Number((el as HTMLInputElement).dataset.i)] = (el as HTMLInputElement).value;
+      };
+    });
+    const move = (from: number, to: number) => {
+      if (to < 0 || to >= infillNames.length) return;
+      const [x] = infillNames.splice(from, 1);
+      infillNames.splice(to, 0, x);
+      render();
+    };
+    body.querySelectorAll('[data-up]').forEach((b) => {
+      (b as HTMLButtonElement).onclick = () => move(Number((b as HTMLButtonElement).dataset.up), Number((b as HTMLButtonElement).dataset.up) - 1);
+    });
+    body.querySelectorAll('[data-down]').forEach((b) => {
+      (b as HTMLButtonElement).onclick = () => move(Number((b as HTMLButtonElement).dataset.down), Number((b as HTMLButtonElement).dataset.down) + 1);
+    });
+    body.querySelectorAll('[data-rm]').forEach((b) => {
+      (b as HTMLButtonElement).onclick = () => {
+        infillNames.splice(Number((b as HTMLButtonElement).dataset.rm), 1);
+        if (infillNames.length === 0) infillNames = [''];
+        render();
+      };
+    });
+    ($('#ifadd') as HTMLButtonElement).onclick = () => {
+      infillNames.push('');
+      render();
+    };
+    ($('#ifcancel') as HTMLButtonElement).onclick = () => {
+      $('#dialog').classList.add('hidden');
+    };
+    ($('#ifok') as HTMLButtonElement).onclick = () => {
+      const i = Number(($('#ifleg') as HTMLSelectElement).value);
+      const names = infillNames.map((n) => n.trim()).filter(Boolean);
+      if (!names.length) {
+        setMessage('Type at least one station name.');
+        return;
+      }
+      const made = spreadAlong(rt.id, legs[i][0], legs[i][1], names);
+      setMessage(`${made.length} stations placed along ${rt.name}.`);
+      infillNames = [''];
+      $('#dialog').classList.add('hidden');
+      draw();
+      renderPanels();
+    };
+  };
+  render();
+  $('#dialog').classList.remove('hidden');
+}
+
+// ---------------------------------------------------------------- coast panel
+function renderCoastInspector() {
+  const insp = $('#inspector');
+  const o = state.project.outline;
+  if (!o) {
+    insp.innerHTML = '<h2>Coastline</h2><p class="hint">No outline loaded.</p>';
+    return;
+  }
+  const pick = state.coastPick;
+  const shape = pick ? o.shapes.find((s) => s.id === pick.shapeId) : undefined;
+  const pt = shape && pick ? shape.ring[pick.index] : undefined;
+  const pinned = Boolean(pick && shape?.shared?.[pick.index]);
+
+  insp.innerHTML = `
+    <h2>Coastline</h2>
+    <p class="hint">Drag any handle to move that stretch of coast. Click an edge to add a point.
+    Delete removes one. Hold shift while dragging for a quarter-unit nudge.<br><br>
+    One grid unit is about 20 km. Violet handles are shared with the country next door — move one
+    and both follow.</p>
+    ${
+      pt && shape
+        ? `<label class="f">Selected</label>
+           <p class="hint"><b>${esc(shape.name)}</b> · point ${pick!.index + 1} of ${shape.ring.length}
+           <br>at ${pt.x}, ${pt.y}${pinned ? ' · shared border point' : ''}</p>
+           <div class="rowbtns">
+             <button class="mini" id="cnudge-l">←</button>
+             <button class="mini" id="cnudge-r">→</button>
+             <button class="mini" id="cnudge-u">↑</button>
+             <button class="mini" id="cnudge-d">↓</button>
+           </div>`
+        : '<p class="hint">Nothing selected.</p>'
+    }
+    <label class="f">Corner rounding</label>
+    <input id="crad" type="range" min="0" max="60" value="${Math.round(o.radius * 100)}" style="width:100%">
+    <button class="mini" id="creset">Reset the whole coastline</button>
+  `;
+
+  if (pt && pick) {
+    const nudge = (dx: number, dy: number) => () => {
+      movePoint(state.project.outline!, pick.shapeId, pick.index, { x: pt.x + dx, y: pt.y + dy });
+      draw();
+      renderPanels();
+    };
+    ($('#cnudge-l') as HTMLButtonElement).onclick = nudge(-1, 0);
+    ($('#cnudge-r') as HTMLButtonElement).onclick = nudge(1, 0);
+    ($('#cnudge-u') as HTMLButtonElement).onclick = nudge(0, -1);
+    ($('#cnudge-d') as HTMLButtonElement).onclick = nudge(0, 1);
+  }
+  ($('#crad') as HTMLInputElement).oninput = (e) => {
+    o.radius = Number((e.target as HTMLInputElement).value) / 100;
+    draw();
+  };
+  ($('#creset') as HTMLButtonElement).onclick = () => {
+    state.project.outline = JSON.parse(JSON.stringify(OUTLINE)) as Outline;
+    state.coastPick = undefined;
+    setMessage('Coastline reset.');
+    draw();
+    renderPanels();
+  };
+}
+
 // ---------------------------------------------------------------- route panel
 function renderRouteInspector() {
   const insp = $('#inspector');
@@ -402,14 +922,27 @@ function renderRouteInspector() {
         .map((k) => `<option value="${k}" ${rt.style === k ? 'selected' : ''}>${k}</option>`)
         .join('')}
     </select>
-    <label class="f">${stations.length} stations, in order</label>
-    <div class="picklist">
-      ${stations.map((id) => `<label>${esc(d.stations[id]?.name ?? id)}</label>`).join('')}
+    <label class="f">Path — ${rt.path.length} points, ${stations.length} stations</label>
+    <div class="picklist" id="rpath">
+      ${rt.path
+        .map((n, i) => {
+          const label =
+            n.kind === 'bend'
+              ? `<i>bend at ${n.at.x}, ${n.at.y}</i>`
+              : esc(d.stations[n.id]?.name ?? n.id);
+          const sel = state.nodePick === i ? ' style="background:#E7EDF4;font-weight:600"' : '';
+          return `<label data-node="${i}"${sel}>${label}</label>`;
+        })
+        .join('')}
     </div>
+    <p class="hint">Pick the <b>Edit route</b> tool to drag these on the map. Click a leg to add a
+    bend, Delete to remove one. Shift-click a station to add it to the end, alt-click for the start.</p>
     <div class="rowbtns">
-      <button class="mini" id="rsvc">Add service</button>
-      <button class="mini" id="rdel">Delete route</button>
+      <button class="mini" id="rrev">Reverse</button>
+      <button class="mini" id="rfill">Add stations</button>
     </div>
+    <button class="mini" id="rsvc">Add service</button>
+    <button class="mini" id="rdel">Delete route</button>
   `;
   const nm = $('#rn') as HTMLInputElement;
   nm.oninput = () => {
@@ -419,6 +952,21 @@ function renderRouteInspector() {
   ($('#rs') as HTMLSelectElement).onchange = (e) => {
     rt.style = (e.target as HTMLSelectElement).value as Route['style'];
     draw();
+  };
+  $('#rpath').querySelectorAll('label').forEach((el) => {
+    (el as HTMLElement).onclick = () => {
+      state.nodePick = Number((el as HTMLElement).dataset.node);
+      draw();
+      renderPanels();
+    };
+  });
+  ($('#rfill') as HTMLButtonElement).onclick = openInfill;
+  ($('#rrev') as HTMLButtonElement).onclick = () => {
+    rt.path.reverse();
+    state.nodePick = undefined;
+    setMessage(`${rt.name} reversed.`);
+    draw();
+    renderPanels();
   };
   ($('#rsvc') as HTMLButtonElement).onclick = addServiceToSelectedRoute;
   ($('#rdel') as HTMLButtonElement).onclick = () => {
@@ -452,11 +1000,13 @@ function renderServiceInspector() {
     insp.innerHTML = '<h2>Service</h2><p class="hint">Select a service on the left.</p>';
     return;
   }
-  // every station the service passes, taken from the routes it runs over
-  const along: string[] = [];
+  // only the stations the service actually reaches, once its extent is applied
+  const along = serviceStations(d, sv);
+  const everywhere: string[] = [];
   for (const rid of sv.routeIds) {
-    for (const id of routeStations(rid)) if (!along.includes(id)) along.push(id);
+    for (const id of routeStations(rid)) if (!everywhere.includes(id)) everywhere.push(id);
   }
+
   const operators = Object.values(state.project.operators);
 
   insp.innerHTML = `
@@ -500,7 +1050,23 @@ function renderServiceInspector() {
         .join('')}
     </div>
 
-    <label class="f">Calls at (${sv.calls.length} of ${along.length})</label>
+    <label class="f">Runs from</label>
+    <select id="sfrom">
+      <option value="">start of the route</option>
+      ${everywhere
+        .map((id) => `<option value="${id}" ${sv.fromStation === id ? 'selected' : ''}>${esc(d.stations[id]?.name ?? id)}</option>`)
+        .join('')}
+    </select>
+    <label class="f">Runs to</label>
+    <select id="sto">
+      <option value="">end of the route</option>
+      ${everywhere
+        .map((id) => `<option value="${id}" ${sv.toStation === id ? 'selected' : ''}>${esc(d.stations[id]?.name ?? id)}</option>`)
+        .join('')}
+    </select>
+    <button class="mini" id="strim">Trim to its calling stations</button>
+
+    <label class="f">Calls at (${sv.calls.filter((c) => along.includes(c)).length} of ${along.length})</label>
     <div class="picklist" id="scalls">
       ${along
         .map((id) => {
@@ -569,6 +1135,27 @@ function renderServiceInspector() {
       renderPanels();
     };
   });
+  const setEnd = (which: 'fromStation' | 'toStation') => (e: Event) => {
+    const v = (e.target as HTMLSelectElement).value;
+    sv[which] = v || undefined;
+    sv.calls = sv.calls.filter((c) => serviceStations(d, sv).includes(c));
+    draw();
+    renderPanels();
+  };
+  ($('#sfrom') as HTMLSelectElement).onchange = setEnd('fromStation');
+  ($('#sto') as HTMLSelectElement).onchange = setEnd('toStation');
+  ($('#strim') as HTMLButtonElement).onclick = () => {
+    const called = everywhere.filter((id) => sv.calls.includes(id));
+    if (called.length < 2) {
+      setMessage('Tick at least two calling stations first.');
+      return;
+    }
+    sv.fromStation = called[0];
+    sv.toStation = called[called.length - 1];
+    setMessage(`Now runs ${esc(d.stations[called[0]]?.name ?? '')} to ${esc(d.stations[called[called.length - 1]]?.name ?? '')}.`);
+    draw();
+    renderPanels();
+  };
   ($('#sall') as HTMLButtonElement).onclick = () => {
     sv.calls = [...along];
     draw();
@@ -861,6 +1448,77 @@ wrap.addEventListener('mousedown', (ev) => {
     return;
   }
 
+  if (state.tool === 'coast') {
+    const pt = coastPointAt(ev);
+    if (pt) {
+      state.coastPick = pt;
+      state.coastDrag = pt;
+      draw();
+      renderPanels();
+      return;
+    }
+    const edge = coastEdgeAt(ev);
+    if (edge && state.project.outline) {
+      const idx = insertPoint(state.project.outline, edge.shapeId, edge.index);
+      if (idx !== null) {
+        state.coastPick = { shapeId: edge.shapeId, index: idx };
+        state.coastDrag = state.coastPick;
+        setMessage('Point added — drag it into place.');
+      }
+      draw();
+      renderPanels();
+    }
+    return;
+  }
+
+  if (state.tool === 'redit') {
+    const d = doc();
+    const rt = state.selectedRoute ? d.routes[state.selectedRoute] : undefined;
+    if (!rt) {
+      setMessage('Select a route on the left first.');
+      return;
+    }
+    const cell = screenToCell(ev);
+    const station = cellTaken(cell);
+
+    // shift or alt adds a station to one end of the route
+    if (station && (ev.shiftKey || ev.altKey)) {
+      const node = { kind: 'station' as const, id: station };
+      if (ev.altKey) rt.path.unshift(node);
+      else rt.path.push(node);
+      setMessage(`${d.stations[station].name} added to the ${ev.altKey ? 'start' : 'end'} of ${rt.name}.`);
+      draw();
+      renderPanels();
+      return;
+    }
+
+    const node = routeNodeAt(ev);
+    if (node !== undefined) {
+      state.nodePick = node;
+      state.nodeDrag = node;
+      draw();
+      renderPanels();
+      return;
+    }
+    const edge = routeEdgeAt(ev);
+    if (edge !== undefined) {
+      const a = rt.path[edge];
+      const b = rt.path[edge + 1];
+      const ca = a.kind === 'bend' ? a.at : d.stations[a.id].cells[0];
+      const cb = b.kind === 'bend' ? b.at : d.stations[b.id].cells[0];
+      rt.path.splice(edge + 1, 0, {
+        kind: 'bend',
+        at: { x: Math.round((ca.x + cb.x) / 2), y: Math.round((ca.y + cb.y) / 2) },
+      });
+      state.nodePick = edge + 1;
+      state.nodeDrag = state.nodePick;
+      setMessage('Bend added — drag it into place.');
+      draw();
+      renderPanels();
+    }
+    return;
+  }
+
   const c = screenToCell(ev);
   const hit = cellTaken(c);
 
@@ -934,6 +1592,40 @@ wrap.addEventListener('mousemove', (ev) => {
     draw();
     return;
   }
+
+  if (state.nodeDrag !== undefined && state.selectedRoute) {
+    const d = doc();
+    const rt = d.routes[state.selectedRoute];
+    const node = rt?.path[state.nodeDrag];
+    const cell = screenToCell(ev);
+    if (node?.kind === 'bend') {
+      node.at = cell;
+    } else if (node?.kind === 'station') {
+      const st = d.stations[node.id];
+      if (st && !st.locked) {
+        const anchor = st.cells[0];
+        const dx = cell.x - anchor.x;
+        const dy = cell.y - anchor.y;
+        if (dx || dy) st.cells = st.cells.map((k) => ({ x: k.x + dx, y: k.y + dy }));
+      }
+    }
+    draw();
+    return;
+  }
+
+  if (state.coastDrag && state.project.outline) {
+    const o = state.project.outline;
+    const m = screenToMap(ev);
+    const step = ev.shiftKey ? 0.25 : 1;      // shift for a finer nudge
+    const to = {
+      x: Math.round(m.x / o.unit / step) * step,
+      y: Math.round(m.y / o.unit / step) * step,
+    };
+    movePoint(o, state.coastDrag.shapeId, state.coastDrag.index, to);
+    draw();
+    return;
+  }
+
   if (!state.dragging) return;
 
   const st = doc().stations[state.dragging];
@@ -947,7 +1639,14 @@ wrap.addEventListener('mousemove', (ev) => {
 });
 
 window.addEventListener('mouseup', () => {
-  if (state.dragging) renderPanels();
+  if (state.dragging) {
+    respreadAround(state.dragging);
+    draw();
+    renderPanels();
+  }
+  if (state.coastDrag || state.nodeDrag !== undefined) renderPanels();
+  state.nodeDrag = undefined;
+  state.coastDrag = undefined;
   state.dragging = undefined;
   state.panning = undefined;
   wrap.classList.remove('panning');
@@ -961,7 +1660,43 @@ window.addEventListener('keydown', (ev) => {
     state.spaceHeld = true;
     wrap.classList.add('pan-ready');
   }
-  if (ev.key === 'Escape') cancelRoute();
+  if (ev.key === 'Escape') {
+    cancelRoute();
+    state.coastPick = undefined;
+    draw();
+  }
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && state.tool === 'redit' && state.nodePick !== undefined) {
+    const t = ev.target as HTMLElement;
+    if (!t || (t.tagName !== 'INPUT' && t.tagName !== 'TEXTAREA')) {
+      ev.preventDefault();
+      const rt = state.selectedRoute ? doc().routes[state.selectedRoute] : undefined;
+      if (rt && rt.path.length > 2) {
+        const was = rt.path[state.nodePick];
+        rt.path.splice(state.nodePick, 1);
+        state.nodePick = undefined;
+        setMessage(was.kind === 'bend' ? 'Bend removed.' : 'Station taken off the route.');
+      } else {
+        setMessage('A route needs at least two points.');
+      }
+      draw();
+      renderPanels();
+    }
+  }
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && state.tool === 'coast' && state.coastPick) {
+    const t = ev.target as HTMLElement;
+    if (!t || (t.tagName !== 'INPUT' && t.tagName !== 'TEXTAREA')) {
+      ev.preventDefault();
+      const o = state.project.outline;
+      if (o && deletePoint(o, state.coastPick.shapeId, state.coastPick.index)) {
+        state.coastPick = undefined;
+        setMessage('Point removed.');
+      } else {
+        setMessage('That point is shared with the country next door, so it stays.');
+      }
+      draw();
+      renderPanels();
+    }
+  }
   if ((ev.key === 'f' || ev.key === 'F') && state.tool === 'route') {
     const t = ev.target as HTMLElement;
     if (!t || (t.tagName !== 'INPUT' && t.tagName !== 'TEXTAREA')) flipLastBend();
@@ -1088,7 +1823,11 @@ $('#towns').onclick = () => {
 
 $('#save').onclick = save;
 $('#export-svg').onclick = async () => {
-  const svg = renderSvg({ doc: doc(), operators: state.project.operators, basemap: state.basemap });
+  const svg = renderSvg({
+    doc: doc(),
+    operators: state.project.operators,
+    outline: state.project.outline,
+  });
   const p = await window.api.exportSvg(svg);
   if (p) setMessage(`Exported to ${p}`);
 };
@@ -1132,8 +1871,10 @@ $('#restart').onclick = () => window.api.installUpdate();
 
 // ---------------------------------------------------------------- boot
 (async () => {
-  state.basemap = BASEMAP_SVG;
   state.places = PLACES;
+  if (!state.project.outline) {
+    state.project.outline = JSON.parse(JSON.stringify(OUTLINE)) as Outline;
+  }
   $('#ver').textContent = `v${await window.api.version()}`;
   fitToMap();
   renderPanels();

@@ -30,6 +30,20 @@ export interface Station {
   airport?: boolean;
   proposed?: boolean;
   locked?: boolean;
+  /**
+   * Orientation of the station's body, in 45-degree steps clockwise from east.
+   * Left undefined the app works it out from the lines meeting the station; set
+   * it, or lock it, and it stays where you put it.
+   */
+  rotation?: number;
+  rotationLocked?: boolean;
+  /** Which way the arm of a T-shaped interchange sticks out. */
+  armSide?: 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
+  /**
+   * Set on stations that were spread evenly between two others, so they can be
+   * spread again if one of those two moves.
+   */
+  spacing?: { routeId: string; anchorA: string; anchorB: string };
   /** Real-world position, used to seed placement and to draw ghost markers. */
   lat?: number;
   lon?: number;
@@ -63,6 +77,9 @@ export interface Service {
   routeIds: string[];
   /** The stations it actually calls at. Everything else on the path is passed. */
   calls: string[];
+  /** Where the service begins and ends. Blank means the far ends of its routes. */
+  fromStation?: string;
+  toStation?: string;
   /** Position across a shared corridor. Lower sits on one side, higher the other. */
   order?: number;
   oneWayWhole?: boolean;
@@ -116,6 +133,8 @@ export interface MapDoc {
 export interface Project {
   version: 1;
   name: string;
+  /** The coastline, editable inside the app and saved with the map. */
+  outline?: import('./outline').Outline;
   operators: Record<string, Operator>;
   /** The rail map, plus any others such as buses and trams. */
   maps: Record<string, MapDoc>;
