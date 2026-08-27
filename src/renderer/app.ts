@@ -1881,6 +1881,18 @@ document.querySelectorAll<HTMLButtonElement>('.tool[data-tool]').forEach((b) => 
     state.tool = b.dataset.tool as Tool;
     if (state.tool !== 'route') cancelRoute();
     wrap.classList.toggle('pan-ready', state.tool === 'pan');
+    if (state.tool === 'coast') {
+      setMessage('Drag a handle to move the coast. Click an edge to add a point, Delete to remove.');
+    } else if (state.tool === 'redit') {
+      setMessage(
+        state.selectedRoute
+          ? 'Drag the handles. Click a leg to add a bend, Delete to remove one.'
+          : 'Select a route on the left to edit it.',
+      );
+    }
+    // the handles only appear once something redraws
+    draw();
+    renderPanels();
   };
 });
 
@@ -2019,6 +2031,11 @@ window.api.onMenu(async (what) => {
   const r = await window.api.openProject();
   if (!r) return;
   state.project = JSON.parse(r.json) as Project;
+  // older maps were saved before the coastline was editable data
+  if (!state.project.outline) {
+    state.project.outline = JSON.parse(JSON.stringify(OUTLINE)) as Outline;
+  }
+  if (!state.project.operators) state.project.operators = {};
   state.filePath = r.path;
   $('#filename').textContent = `— ${r.path.split(/[\\/]/).pop()}`;
   draw();
