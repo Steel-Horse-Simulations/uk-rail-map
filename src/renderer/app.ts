@@ -563,6 +563,10 @@ function renderInspector() {
     <h2>Station</h2>
     <label class="f" for="nm">Name</label>
     <input id="nm" type="text" value="${esc(st.name)}">
+    <label class="f" for="code">Station code</label>
+    <input id="code" type="text" maxlength="3" placeholder="ABD" value="${esc(st.code ?? '')}"
+      style="text-transform:uppercase">
+    <p class="hint">Kept with the station, never drawn on the map.</p>
     <label class="f">Type</label>
     <div class="seg" id="kind">
       <button data-k="stop" class="${st.kind === 'stop' ? 'on' : ''}">Stop</button>
@@ -610,6 +614,10 @@ function renderInspector() {
   nm.oninput = () => {
     st.name = nm.value;
     draw(); // canvas only — the panel stays put, so focus is not lost
+  };
+  const code = $('#code') as HTMLInputElement;
+  code.oninput = () => {
+    st.code = code.value.toUpperCase().slice(0, 3) || undefined;
   };
 
   $('#kind').querySelectorAll('button').forEach((b) => {

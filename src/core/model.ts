@@ -22,6 +22,11 @@ export type StationKind =
 export interface Station {
   id: string;
   name: string;
+  /**
+   * The three-letter station code (ABD, STN). Kept with the station but never
+   * drawn — it is there for matching against timetables and station lists.
+   */
+  code?: string;
   /** A station may occupy several cells; big termini need the room. */
   cells: Cell[];
   kind: StationKind;
