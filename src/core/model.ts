@@ -130,8 +130,10 @@ export function operatorRegions(o: Operator): Region[] {
 export interface MapDoc {
   id: string;
   name: string;
-  /** Grid pitch in pixels at 100% zoom. */
+  /** Grid pitch in map units: how finely stations can be placed. */
   cellSize: number;
+  /** How heavily the map is drawn, independent of the pitch. 1 is thin, 4 is bold. */
+  weight?: number;
   stations: Record<string, Station>;
   routes: Record<string, Route>;
   services: Record<string, Service>;
@@ -157,7 +159,8 @@ export function emptyProject(name = 'Untitled map'): Project {
       rail: {
         id: 'rail',
         name: 'Rail',
-        cellSize: 150,
+        cellSize: 34,
+        weight: 2,
         stations: {},
         routes: {},
         services: {},

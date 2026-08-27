@@ -1951,6 +1951,12 @@ $('#lock').onclick = () => {
 
 $('#fit').onclick = fitToMap;
 
+($('#weight') as HTMLInputElement).oninput = (e) => {
+  doc().weight = Number((e.target as HTMLInputElement).value) / 10;
+  $('#weight-label').textContent = `${(doc().weight ?? 2).toFixed(1)}×`;
+  draw();
+};
+
 $('#grid').onclick = () => {
   state.showGrid = !state.showGrid;
   $('#grid').classList.toggle('on', state.showGrid);
@@ -2052,17 +2058,19 @@ function fitToMap() {
   draw();
 }
 
-const CELL = 150;
+const CELL = 34;
 
 /**
- * Early maps used a 34-unit grid, which put nearly 1,300 cells across the
- * country and left lines a hair's breadth wide at any sensible zoom. Anything
- * on the old pitch is moved onto the new one, keeping every station where it
- * sits relative to the coast.
+ * Put the grid back to a fine pitch.
+ *
+ * A previous version coarsened it to 150 units to make lines thicker, which was
+ * the wrong lever: it rounded every station onto a grid a mile and a half across,
+ * so stations that had been several cells apart ended up neighbours. Weight is a
+ * separate setting now, and anything coarsened is put back.
  */
 function rescaleIfNeeded() {
   for (const map of Object.values(state.project.maps)) {
-    if (map.cellSize >= CELL) continue;
+    if (map.cellSize === CELL) continue;
     const k = map.cellSize / CELL;
     for (const st of Object.values(map.stations)) {
       st.cells = st.cells.map((c) => ({ x: Math.round(c.x * k), y: Math.round(c.y * k) }));
@@ -2070,11 +2078,12 @@ function rescaleIfNeeded() {
     for (const rt of Object.values(map.routes)) {
       rt.path = rt.path.map((n) =>
         n.kind === 'bend'
-          ? { kind: 'bend', at: { x: Math.round(n.at.x * k), y: Math.round(n.at.y * k) } }
+          ? { kind: 'bend' as const, at: { x: Math.round(n.at.x * k), y: Math.round(n.at.y * k) } }
           : n,
       );
     }
     map.cellSize = CELL;
+    if (!map.weight) map.weight = 2;
   }
 }
 
@@ -2149,6 +2158,9 @@ $('#check-updates').onclick = async () => {
   }
   rescaleIfNeeded();
   $('#ver').textContent = `v${await window.api.version()}`;
+  const w = doc().weight ?? 2;
+  ($('#weight') as HTMLInputElement).value = String(Math.round(w * 10));
+  $('#weight-label').textContent = `${w.toFixed(1)}×`;
   fitToMap();
   renderPanels();
 })();

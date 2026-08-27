@@ -28,22 +28,24 @@ export interface Theme {
   grey: string;
 }
 
-export const defaultTheme: Theme = themeForCell(34);
+export const defaultTheme: Theme = themeForCell(34, 2);
 
 /**
- * Line weights come from the grid pitch rather than being fixed.
+ * How heavily the map is drawn.
  *
- * The map is tens of thousands of units across, so a line measured in single
- * digits is a hair's breadth at anything but the closest zoom. Tying every
- * weight to the cell size keeps the drawing in proportion however the map is
- * scaled, and makes the pitch the one number that governs how big it all looks.
+ * The grid pitch decides how finely stations can be placed; the weight decides
+ * how thick the drawing is. They have to be separate, because the two pull in
+ * opposite directions: a city needs a fine pitch to fit its stations in, while a
+ * view of half the country needs heavy lines to be legible at all. Tying them
+ * together makes one scale unusable whichever way you set it.
  */
-export function themeForCell(cellSize: number): Theme {
+export function themeForCell(cellSize: number, weight = 2): Theme {
+  const w = cellSize * 0.3 * weight;
   return {
-    lineWidth: cellSize * 0.42,
+    lineWidth: w,
     laneGap: 2,
-    cornerRadius: cellSize * 0.5,
-    tickWidth: cellSize * 0.13,
+    cornerRadius: w * 1.8,
+    tickWidth: w * 0.5,
     ink: '#111111',
     grey: '#9A9A9A',
   };
@@ -161,7 +163,7 @@ const FALLBACK_PALETTE = [
 
 export function renderSvg(opts: RenderOptions): string {
   const { doc, operators } = opts;
-  const theme = opts.theme ?? themeForCell(doc.cellSize);
+  const theme = opts.theme ?? themeForCell(doc.cellSize, doc.weight ?? 2);
   const palette = opts.palette ?? FALLBACK_PALETTE;
   const cs = doc.cellSize;
   const pitch = theme.lineWidth * theme.laneGap;
@@ -337,16 +339,19 @@ export function renderSvg(opts: RenderOptions): string {
     }
 
     if (!st.interchange && calling.length >= 1) {
-      // ordinary stop: one tick per calling service, in that service's colour,
-      // sticking out of one side and long enough to graze the next line along
-      const sign = st.tickSide === 'left' ? -1 : 1;
+      // An ordinary stop is a circle on each line that calls there — one per
+      // service, sitting in that service's own lane. Ticks read poorly once a
+      // corridor carries more than a line or two.
       for (const d of calling) {
-        const h = d.hits.get(st.id)!;
-        const nx = -h.dir.y * sign;
-        const ny = h.dir.x * sign;
-        const L = theme.lineWidth * 1.72;
+        const { pt } = d.hits.get(st.id)!;
+        const col = d.service.routeIds.every((r) => !routeHasServices(doc, r)) ? theme.grey : d.colour;
+        // sized against the line itself: the ring stands a little proud of it,
+        // and the white middle is about as wide as the line
+        const outer = theme.lineWidth * 0.76;
+        const inner = theme.lineWidth * 0.5;
         over.push(
-          `<line x1="${h.pt.x.toFixed(1)}" y1="${h.pt.y.toFixed(1)}" x2="${(h.pt.x + nx * L).toFixed(1)}" y2="${(h.pt.y + ny * L).toFixed(1)}" stroke="${d.colour}" stroke-width="${theme.tickWidth}"/>`,
+          `<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="${outer.toFixed(1)}" fill="${col}"/>`,
+          `<circle cx="${pt.x.toFixed(1)}" cy="${pt.y.toFixed(1)}" r="${inner.toFixed(1)}" fill="#ffffff"/>`,
         );
       }
       continue;
@@ -451,7 +456,7 @@ export function renderSvg(opts: RenderOptions): string {
         away = { x: -axis.y * sign, y: axis.x * sign };
       }
     }
-    const clear = st.interchange || calling.length > 1 ? R + border + 6 : theme.lineWidth * 1.72 + 5;
+    const clear = (st.interchange || calling.length > 1 ? R + border : theme.lineWidth * 0.76) + theme.lineWidth * 0.7;
     const x = anchorPt.x + away.x * clear;
     const y = anchorPt.y + away.y * clear;
 
@@ -469,10 +474,10 @@ export function renderSvg(opts: RenderOptions): string {
         : away.x > 0
           ? 'start'
           : 'end';
-    const dy = (st.labelAngle ? 0.36 : away.y > 0.3 ? 0.9 : away.y < -0.3 ? -0.37 : 0.36) * cs * 0.34;
+    const dy = (st.labelAngle ? 0.36 : away.y > 0.3 ? 0.9 : away.y < -0.3 ? -0.37 : 0.36) * theme.lineWidth * 1.9;
     const rot = st.labelAngle ? ` transform="rotate(${st.labelAngle} ${x.toFixed(1)} ${(y + dy).toFixed(1)})"` : '';
     const t = esc(st.name);
-    const fs = cs * 0.34;
+    const fs = theme.lineWidth * 1.9;
     labels.push(
       `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" font-size="${fs.toFixed(1)}" font-weight="600" text-anchor="${anchor}" fill="none" stroke="#ffffff" stroke-width="${(fs * 0.27).toFixed(1)}" stroke-linejoin="round"${rot}>${t}</text>`,
       `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" font-size="${fs.toFixed(1)}" font-weight="600" text-anchor="${anchor}" fill="${colour}"${rot}>${t}</text>`,
