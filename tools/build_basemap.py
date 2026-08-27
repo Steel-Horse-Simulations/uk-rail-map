@@ -280,7 +280,7 @@ for name, ring in SHAPES:
         "id": name.lower().replace(" ", "-"),
         "name": name,
         "fill": COL[name],
-        "ring": [{"x": x, "y": y} for x, y in RINGS[name]],
+        "ring": [{"x": x - MINX, "y": y - MINY} for x, y in RINGS[name]],
         "shared": {},
     })
 

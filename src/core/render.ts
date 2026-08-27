@@ -28,14 +28,26 @@ export interface Theme {
   grey: string;
 }
 
-export const defaultTheme: Theme = {
-  lineWidth: 7.2,
-  laneGap: 2,
-  cornerRadius: 13,
-  tickWidth: 3.6,
-  ink: '#111111',
-  grey: '#9A9A9A',
-};
+export const defaultTheme: Theme = themeForCell(34);
+
+/**
+ * Line weights come from the grid pitch rather than being fixed.
+ *
+ * The map is tens of thousands of units across, so a line measured in single
+ * digits is a hair's breadth at anything but the closest zoom. Tying every
+ * weight to the cell size keeps the drawing in proportion however the map is
+ * scaled, and makes the pitch the one number that governs how big it all looks.
+ */
+export function themeForCell(cellSize: number): Theme {
+  return {
+    lineWidth: cellSize * 0.42,
+    laneGap: 2,
+    cornerRadius: cellSize * 0.5,
+    tickWidth: cellSize * 0.13,
+    ink: '#111111',
+    grey: '#9A9A9A',
+  };
+}
 
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -149,7 +161,7 @@ const FALLBACK_PALETTE = [
 
 export function renderSvg(opts: RenderOptions): string {
   const { doc, operators } = opts;
-  const theme = opts.theme ?? defaultTheme;
+  const theme = opts.theme ?? themeForCell(doc.cellSize);
   const palette = opts.palette ?? FALLBACK_PALETTE;
   const cs = doc.cellSize;
   const pitch = theme.lineWidth * theme.laneGap;
@@ -457,12 +469,13 @@ export function renderSvg(opts: RenderOptions): string {
         : away.x > 0
           ? 'start'
           : 'end';
-    const dy = st.labelAngle ? 4.8 : away.y > 0.3 ? 12 : away.y < -0.3 ? -5 : 4.8;
+    const dy = (st.labelAngle ? 0.36 : away.y > 0.3 ? 0.9 : away.y < -0.3 ? -0.37 : 0.36) * cs * 0.34;
     const rot = st.labelAngle ? ` transform="rotate(${st.labelAngle} ${x.toFixed(1)} ${(y + dy).toFixed(1)})"` : '';
     const t = esc(st.name);
+    const fs = cs * 0.34;
     labels.push(
-      `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" font-size="13.5" font-weight="600" text-anchor="${anchor}" fill="none" stroke="#ffffff" stroke-width="3.6" stroke-linejoin="round"${rot}>${t}</text>`,
-      `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" font-size="13.5" font-weight="600" text-anchor="${anchor}" fill="${colour}"${rot}>${t}</text>`,
+      `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" font-size="${fs.toFixed(1)}" font-weight="600" text-anchor="${anchor}" fill="none" stroke="#ffffff" stroke-width="${(fs * 0.27).toFixed(1)}" stroke-linejoin="round"${rot}>${t}</text>`,
+      `<text x="${x.toFixed(1)}" y="${(y + dy).toFixed(1)}" font-size="${fs.toFixed(1)}" font-weight="600" text-anchor="${anchor}" fill="${colour}"${rot}>${t}</text>`,
     );
   }
 

@@ -2052,6 +2052,32 @@ function fitToMap() {
   draw();
 }
 
+const CELL = 150;
+
+/**
+ * Early maps used a 34-unit grid, which put nearly 1,300 cells across the
+ * country and left lines a hair's breadth wide at any sensible zoom. Anything
+ * on the old pitch is moved onto the new one, keeping every station where it
+ * sits relative to the coast.
+ */
+function rescaleIfNeeded() {
+  for (const map of Object.values(state.project.maps)) {
+    if (map.cellSize >= CELL) continue;
+    const k = map.cellSize / CELL;
+    for (const st of Object.values(map.stations)) {
+      st.cells = st.cells.map((c) => ({ x: Math.round(c.x * k), y: Math.round(c.y * k) }));
+    }
+    for (const rt of Object.values(map.routes)) {
+      rt.path = rt.path.map((n) =>
+        n.kind === 'bend'
+          ? { kind: 'bend', at: { x: Math.round(n.at.x * k), y: Math.round(n.at.y * k) } }
+          : n,
+      );
+    }
+    map.cellSize = CELL;
+  }
+}
+
 function setMessage(m: string) {
   $('#msg').textContent = m;
 }
@@ -2066,6 +2092,7 @@ window.api.onMenu(async (what) => {
     state.project.outline = JSON.parse(JSON.stringify(OUTLINE)) as Outline;
   }
   if (!state.project.operators) state.project.operators = {};
+  rescaleIfNeeded();
   state.filePath = r.path;
   $('#filename').textContent = `— ${r.path.split(/[\\/]/).pop()}`;
   draw();
@@ -2120,6 +2147,7 @@ $('#check-updates').onclick = async () => {
   if (!state.project.outline) {
     state.project.outline = JSON.parse(JSON.stringify(OUTLINE)) as Outline;
   }
+  rescaleIfNeeded();
   $('#ver').textContent = `v${await window.api.version()}`;
   fitToMap();
   renderPanels();
