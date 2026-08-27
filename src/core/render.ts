@@ -442,8 +442,22 @@ export function renderSvg(opts: RenderOptions): string {
     const clear = st.interchange || calling.length > 1 ? R + border + 6 : theme.lineWidth * 1.72 + 5;
     const x = anchorPt.x + away.x * clear;
     const y = anchorPt.y + away.y * clear;
-    const anchor = away.x < -0.3 ? 'end' : away.x > 0.3 ? 'start' : 'middle';
-    const dy = away.y > 0.3 ? 12 : away.y < -0.3 ? -5 : 4.8;
+
+    // Where the tick points up or down there is room to centre a flat name on it.
+    // Where it points left or right there is not — the name has to run away from
+    // the line instead, or half of it lands back across the track. A tilted name
+    // always starts at the tick and runs outward.
+    const upright = Math.abs(away.y) > Math.abs(away.x);
+    const anchor = st.labelAngle
+      ? away.x >= 0
+        ? 'start'
+        : 'end'
+      : upright
+        ? 'middle'
+        : away.x > 0
+          ? 'start'
+          : 'end';
+    const dy = st.labelAngle ? 4.8 : away.y > 0.3 ? 12 : away.y < -0.3 ? -5 : 4.8;
     const rot = st.labelAngle ? ` transform="rotate(${st.labelAngle} ${x.toFixed(1)} ${(y + dy).toFixed(1)})"` : '';
     const t = esc(st.name);
     labels.push(

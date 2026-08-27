@@ -73,7 +73,8 @@ const state = {
   selectedService: undefined as string | undefined,
   /** what the right-hand panel is showing */
   focus: 'station' as 'station' | 'route' | 'service',
-  drawing: [] as string[],
+  /** the route being drawn: stations, plus any bends you place yourself */
+  drawing: [] as ({ kind: 'station'; id: string } | { kind: 'bend'; at: Cell })[],
   /** per leg of the route being drawn: take the diagonal first, or the straight */
   bendFlips: [] as boolean[],
   dragging: undefined as string | undefined,
@@ -176,20 +177,19 @@ function townsLayer(): string {
  * stations are not already in line. Each leg remembers which way round its
  * elbow goes, so Flip bend can swap it without disturbing the rest.
  */
-function buildPath(ids: string[], flips: boolean[]) {
+type DrawNode = { kind: 'station'; id: string } | { kind: 'bend'; at: Cell };
+
+function buildPath(nodes: DrawNode[], flips: boolean[]) {
   const d = doc();
-  const path: (
-    | { kind: 'station'; id: string }
-    | { kind: 'bend'; at: Cell }
-  )[] = [];
-  ids.forEach((id, i) => {
+  const cellOf = (n: DrawNode) => (n.kind === 'bend' ? n.at : d.stations[n.id].cells[0]);
+  const path: DrawNode[] = [];
+  nodes.forEach((n, i) => {
     if (i > 0) {
-      const a = d.stations[ids[i - 1]].cells[0];
-      const b = d.stations[id].cells[0];
-      const bend = elbow(a, b, flips[i - 1] ?? false);
+      // a corner is only guessed where you have not put one there yourself
+      const bend = elbow(cellOf(nodes[i - 1]), cellOf(n), flips[i - 1] ?? false);
       if (bend) path.push({ kind: 'bend', at: bend });
     }
-    path.push({ kind: 'station', id });
+    path.push(n);
   });
   return path;
 }
@@ -367,9 +367,14 @@ function previewLayer(): string {
     n.kind === 'bend' ? n.at : doc().stations[n.id].cells[0],
   );
   const d = pts.map((c, i) => `${i ? 'L' : 'M'} ${c.x * cs} ${c.y * cs}`).join(' ');
+  const k = 1 / state.zoom;
   const dots = state.drawing
-    .map((id) => doc().stations[id].cells[0])
-    .map((c) => `<circle cx="${c.x * cs}" cy="${c.y * cs}" r="${7 / state.zoom}" fill="none" stroke="#E8930C" stroke-width="${3 / state.zoom}"/>`)
+    .map((n) => {
+      const c = n.kind === 'bend' ? n.at : doc().stations[n.id].cells[0];
+      return n.kind === 'bend'
+        ? `<rect x="${c.x * cs - 5 * k}" y="${c.y * cs - 5 * k}" width="${10 * k}" height="${10 * k}" fill="#ffffff" stroke="#E8930C" stroke-width="${2.6 * k}"/>`
+        : `<circle cx="${c.x * cs}" cy="${c.y * cs}" r="${7 * k}" fill="none" stroke="#E8930C" stroke-width="${3 * k}"/>`;
+    })
     .join('');
   return `<path d="${d}" fill="none" stroke="#E8930C" stroke-width="${5 / state.zoom}" stroke-dasharray="${8 / state.zoom} ${6 / state.zoom}" stroke-linejoin="round"/>${dots}`;
 }
@@ -1599,28 +1604,34 @@ wrap.addEventListener('mousedown', (ev) => {
   }
 
   if (state.tool === 'route') {
-    if (!hit) {
-      setMessage('Route tool: click a station you have already placed.');
-      return;
-    }
-    const prev = state.drawing[state.drawing.length - 1];
-    if (prev === hit) return;
-    let bent = false;
-    if (prev) {
-      const a = doc().stations[prev].cells[0];
-      const b = doc().stations[hit].cells[0];
-      bent = !isOctilinear(a, b);
+    const last = state.drawing[state.drawing.length - 1];
+    const cellOf = (n: DrawNode) => (n.kind === 'bend' ? n.at : doc().stations[n.id].cells[0]);
+
+    if (hit) {
+      if (last && last.kind === 'station' && last.id === hit) return;
+      const bent = Boolean(last && !isOctilinear(cellOf(last), doc().stations[hit].cells[0]));
+      if (last) state.bendFlips.push(false);
+      state.drawing.push({ kind: 'station', id: hit });
+      $('#flip-bend').classList.toggle('hidden', !bent);
+      setMessage(
+        bent
+          ? 'A corner was added for you — press F to send it the other way round.'
+          : 'Click empty grid to bend the track, a station to call at it.',
+      );
+    } else {
+      if (!last) {
+        setMessage('Start at a station, then click empty grid to bend the track.');
+        return;
+      }
       state.bendFlips.push(false);
+      state.drawing.push({ kind: 'bend', at: c });
+      $('#flip-bend').classList.add('hidden');
+      setMessage('Bend placed.');
     }
-    state.drawing.push(hit);
-    $('#finish-route').classList.toggle('hidden', state.drawing.length < 2);
+
+    const stops = state.drawing.filter((n) => n.kind === 'station').length;
+    $('#finish-route').classList.toggle('hidden', stops < 2);
     $('#cancel-route').classList.remove('hidden');
-    $('#flip-bend').classList.toggle('hidden', !bent);
-    setMessage(
-      bent
-        ? `${state.drawing.length} picked — a bend was added. Press F or Flip bend to send it the other way round.`
-        : `${state.drawing.length} picked. Press Finish route when you are done.`,
-    );
     draw();
     return;
   }
@@ -1814,8 +1825,8 @@ function cancelRoute() {
 $('#cancel-route').onclick = cancelRoute;
 
 $('#finish-route').onclick = () => {
-  if (state.drawing.length < 2) {
-    setMessage('Pick at least two stations first.');
+  if (state.drawing.filter((n) => n.kind === 'station').length < 2) {
+    setMessage('A route needs at least two stations.');
     return;
   }
   const rt: Route = {
