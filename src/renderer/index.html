@@ -39,6 +39,10 @@
     <button id="fit" class="tool">Fit map</button>
     <button id="grid" class="tool on">Grid</button>
     <button id="towns" class="tool">Towns</button>
+    <button id="tiles" class="tool" title="Real railway map behind the schematic">Railway map</button>
+    <span class="slider hidden" id="tile-slider-wrap">
+      <input type="range" id="tile-slider" min="15" max="100" value="55">
+    </span>
     <span class="slider hidden" id="town-slider-wrap">
       <input type="range" id="town-slider" min="0" max="100" value="45">
       <label for="town-slider" id="town-count">-</label>
@@ -70,6 +74,10 @@
     <span id="counts"></span>
     <span class="spacer"></span>
     <span id="msg"></span>
+  </div>
+
+  <div id="attribution" class="attribution hidden">
+    &copy; OpenStreetMap contributors &middot; OpenRailwayMap (CC-BY-SA)
   </div>
 
   <div id="dialog" class="dialog hidden"><div class="sheet" id="dialog-body"></div></div>

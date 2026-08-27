@@ -96,3 +96,8 @@ input[type=color]{width:100%;height:32px;padding:2px;border:1px solid var(--rule
 
 .grip{cursor:grab;color:#9AA8B6;font-size:12px;letter-spacing:-2px;user-select:none}
 .oprow[draggable=true]{cursor:default}
+
+/* credit for the tile layer; lives outside the drawing so it cannot be exported */
+.attribution{position:fixed;right:246px;bottom:34px;background:rgba(255,255,255,.82);
+  border:1px solid var(--rule);border-radius:4px;padding:2px 7px;font-size:10.5px;color:#4A5A6A}
+.attribution.hidden{display:none}

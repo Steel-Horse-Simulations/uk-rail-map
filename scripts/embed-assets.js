@@ -10,6 +10,7 @@ const path = require('path');
 
 const outline = JSON.parse(fs.readFileSync('assets/outline.json', 'utf8'));
 const places = JSON.parse(fs.readFileSync('assets/places.json', 'utf8'));
+const projection = JSON.parse(fs.readFileSync('assets/projection.json', 'utf8'));
 const xs = outline.shapes.flatMap((s) => s.ring.map((p) => p.x));
 const ys = outline.shapes.flatMap((s) => s.ring.map((p) => p.y));
 const pad = 3;
@@ -23,6 +24,8 @@ fs.writeFileSync(
     `import type { Outline } from '../core/outline';\n` +
     `export const OUTLINE: Outline = ${JSON.stringify(outline)};\n` +
     `export const BASEMAP_W = ${w};\nexport const BASEMAP_H = ${h};\n` +
+    `export const PROJECTION = ${JSON.stringify(projection)} as {\n` +
+    `  unit: number; scale: number; lat0: number; minx: number; miny: number;\n};\n` +
     `export const PLACES: { n: string; x: number; y: number; p: number; t: number }[] = ${JSON.stringify(places.places)};\n`,
 );
 console.log(

@@ -14,7 +14,7 @@ import {
 } from '../core/model';
 import { renderSvg, serviceStations } from '../core/render';
 import { elbow, isOctilinear, snapOctilinear, unitSteps } from '../core/geometry';
-import { BASEMAP_H, BASEMAP_W, OUTLINE, PLACES } from '../generated/assets';
+import { BASEMAP_H, BASEMAP_W, OUTLINE, PLACES, PROJECTION } from '../generated/assets';
 import {
   deletePoint,
   insertPoint,
@@ -66,6 +66,9 @@ const state = {
   pan: { x: 0, y: 0 },
   showGrid: true,
   showTowns: false,
+  /** the real railway map behind the schematic, for lining things up */
+  showTiles: false,
+  tileOpacity: 0.55,
   /** minimum population a town needs before it is drawn */
   townFloor: 30000,
   selectedStation: undefined as string | undefined,
@@ -125,6 +128,81 @@ function cellTaken(c: Cell): string | undefined {
     if (st.cells.some((k) => k.x === c.x && k.y === c.y)) return st.id;
   }
   return undefined;
+}
+
+
+// ---------------------------------------------------------------- real map
+// A tile layer behind the schematic, so you can see where the railway actually
+// goes while you draw it. OpenStreetMap underneath, OpenRailwayMap's gauge style
+// on top. It is a drawing aid only — draw() puts it in as an underlay, and the
+// export path never asks for underlays, so it cannot end up in a saved file.
+const LON_K = Math.cos((PROJECTION.lat0 * Math.PI) / 180) * PROJECTION.scale;
+
+function mapToLonLat(x: number, y: number) {
+  return {
+    lon: (x / PROJECTION.unit + PROJECTION.minx) / LON_K,
+    lat: -(y / PROJECTION.unit + PROJECTION.miny) / PROJECTION.scale,
+  };
+}
+
+function lonLatToMap(lon: number, lat: number) {
+  return {
+    x: (lon * LON_K - PROJECTION.minx) * PROJECTION.unit,
+    y: (-lat * PROJECTION.scale - PROJECTION.miny) * PROJECTION.unit,
+  };
+}
+
+const tileLat = (yTile: number, z: number) => {
+  const n = Math.PI - (2 * Math.PI * yTile) / Math.pow(2, z);
+  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+};
+
+function tileLayer(): string {
+  if (!state.showTiles) return '';
+  const v = view();
+  const nw = mapToLonLat(v.ox, v.oy);
+  const se = mapToLonLat(v.ox + v.vw, v.oy + v.vh);
+
+  // pick the zoom that puts a tile at roughly its natural size on screen
+  const pxPerDegLon = LON_K * PROJECTION.unit * state.zoom;
+  let z = Math.round(Math.log2((360 * pxPerDegLon) / 256));
+  z = Math.max(5, Math.min(16, z));
+  const n = Math.pow(2, z);
+
+  const xFor = (lon: number) => Math.floor(((lon + 180) / 360) * n);
+  const yFor = (lat: number) => {
+    const r = (lat * Math.PI) / 180;
+    return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n);
+  };
+
+  const x0 = Math.max(0, xFor(nw.lon) - 1);
+  const x1 = Math.min(n - 1, xFor(se.lon) + 1);
+  const y0 = Math.max(0, yFor(nw.lat) - 1);
+  const y1 = Math.min(n - 1, yFor(se.lat) + 1);
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 260) {
+    setMessage('Zoom in a little for the railway map to load.');
+    return '';
+  }
+
+  const out: string[] = [`<g opacity="${state.tileOpacity}">`];
+  for (let ty = y0; ty <= y1; ty++) {
+    for (let tx = x0; tx <= x1; tx++) {
+      const lonA = (tx / n) * 360 - 180;
+      const lonB = ((tx + 1) / n) * 360 - 180;
+      const a = lonLatToMap(lonA, tileLat(ty, z));
+      const b = lonLatToMap(lonB, tileLat(ty + 1, z));
+      const w = b.x - a.x;
+      const h = b.y - a.y;
+      if (w <= 0 || h <= 0) continue;
+      const box = `x="${a.x.toFixed(1)}" y="${a.y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}"`;
+      out.push(
+        `<image ${box} href="https://tile.openstreetmap.org/${z}/${tx}/${ty}.png" preserveAspectRatio="none"/>`,
+        `<image ${box} href="https://a.tiles.openrailwaymap.org/gauge/${z}/${tx}/${ty}.png" preserveAspectRatio="none"/>`,
+      );
+    }
+  }
+  out.push('</g>');
+  return out.join('');
 }
 
 // ---------------------------------------------------------------- layers
@@ -400,7 +478,7 @@ function draw() {
       doc: d,
       operators: state.project.operators,
       outline: state.project.outline,
-      underlays: gridLayer() + townsLayer(),
+      underlays: tileLayer() + gridLayer() + townsLayer(),
       overlays: previewLayer() + selectionLayer() + coastLayer() + routeEditLayer(),
     });
   } catch (err) {
@@ -1863,6 +1941,24 @@ $('#fit').onclick = fitToMap;
 $('#grid').onclick = () => {
   state.showGrid = !state.showGrid;
   $('#grid').classList.toggle('on', state.showGrid);
+  draw();
+};
+
+$('#tiles').onclick = () => {
+  state.showTiles = !state.showTiles;
+  $('#tiles').classList.toggle('on', state.showTiles);
+  $('#tile-slider-wrap').classList.toggle('hidden', !state.showTiles);
+  $('#attribution').classList.toggle('hidden', !state.showTiles);
+  setMessage(
+    state.showTiles
+      ? 'Railway map shown. It is a guide only and never appears in an export.'
+      : 'Railway map hidden.',
+  );
+  draw();
+};
+
+($('#tile-slider') as HTMLInputElement).oninput = (e) => {
+  state.tileOpacity = Number((e.target as HTMLInputElement).value) / 100;
   draw();
 };
 
