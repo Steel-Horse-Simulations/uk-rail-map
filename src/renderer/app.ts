@@ -2066,15 +2066,15 @@ function fitToMap() {
   draw();
 }
 
-const CELL = 34;
+const CELL = 10;
 
 /**
- * Put the grid back to a fine pitch.
+ * Keep the grid fine.
  *
- * A previous version coarsened it to 150 units to make lines thicker, which was
- * the wrong lever: it rounded every station onto a grid a mile and a half across,
- * so stations that had been several cells apart ended up neighbours. Weight is a
- * separate setting now, and anything coarsened is put back.
+ * A cell is about 220 metres, so a city has room for hundreds of them and
+ * stations can be placed and spread out properly. Weight is a separate setting,
+ * so making the grid finer no longer makes the drawing thinner. Maps on an older
+ * pitch are converted, keeping every station where it sits relative to the coast.
  */
 function rescaleIfNeeded() {
   for (const map of Object.values(state.project.maps)) {

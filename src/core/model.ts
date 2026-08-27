@@ -164,7 +164,7 @@ export function emptyProject(name = 'Untitled map'): Project {
       rail: {
         id: 'rail',
         name: 'Rail',
-        cellSize: 34,
+        cellSize: 10,
         weight: 2,
         stations: {},
         routes: {},

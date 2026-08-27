@@ -44,7 +44,7 @@ export function themeForCell(cellSize: number, weight = 2): Theme {
   return {
     lineWidth: w,
     laneGap: 2,
-    cornerRadius: w * 1.8,
+    cornerRadius: w * 5,   // room for a few lanes either side and still curve
     tickWidth: w * 0.5,
     ink: '#111111',
     grey: '#9A9A9A',

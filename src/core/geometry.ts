@@ -288,7 +288,10 @@ export function roundedPath(pts: PolyPoint[], baseRadius: number): string {
     const dot = u1.x * u2.x + u1.y * u2.y;
     if (Math.abs(cross) < 1e-6 && dot > 0) continue; // straight through
     const turnLeft = cross > 0 ? -1 : 1; // screen y points down
-    rad[i] = Math.max(3, baseRadius + turnLeft * pts[i].lane);
+    // the inner lane of a bundle turns tighter than the outer one; if the base
+    // radius is smaller than the lane offset the inner one collapses to a square
+    // corner, which is what made bundled lines bend oddly
+    rad[i] = Math.max(baseRadius * 0.25, baseRadius + turnLeft * pts[i].lane);
   }
   for (let pass = 0; pass < 3; pass++) {
     for (let i = 0; i + 1 < n; i++) {
