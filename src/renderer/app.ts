@@ -41,9 +41,10 @@ declare global {
       exportSvg(svg: string): Promise<string | null>;
       exportPdf(svg: string, w: number, h: number): Promise<string | null>;
       version(): Promise<string>;
-      checkForUpdate(): Promise<string | null>;
+      checkForUpdate(): Promise<{ state: string; version?: string | null; detail?: string }>;
       installUpdate(): Promise<void>;
       onUpdateReady(cb: (v: string) => void): void;
+      onUpdateState(cb: (s: { state: string; detail?: string | number }) => void): void;
       onMenu(cb: (what: 'open' | 'save') => void): void;
     };
   }
@@ -2071,8 +2072,47 @@ window.api.onMenu(async (what) => {
   renderPanels();
 });
 
-window.api.onUpdateReady(() => $('#update-bar').classList.remove('hidden'));
+window.api.onUpdateReady((v) => {
+  $('#update-bar').classList.remove('hidden');
+  $('#update-text').textContent = `Version ${v} is ready.`;
+});
 $('#restart').onclick = () => window.api.installUpdate();
+
+// Progress, so a check is not a button that appears to do nothing for a minute
+window.api.onUpdateState(({ state: st, detail }) => {
+  switch (st) {
+    case 'checking':
+      setMessage('Checking for updates…');
+      break;
+    case 'found':
+      setMessage(`Version ${detail} found — downloading in the background.`);
+      break;
+    case 'current':
+      setMessage('You are on the latest version.');
+      break;
+    case 'downloading':
+      setMessage(`Downloading update — ${detail}%`);
+      break;
+    case 'ready':
+      setMessage(`Version ${detail} downloaded.`);
+      break;
+    case 'error':
+      setMessage(`Could not check for updates: ${detail}`);
+      break;
+    default:
+      break;
+  }
+});
+
+$('#check-updates').onclick = async () => {
+  setMessage('Checking for updates…');
+  const r = await window.api.checkForUpdate();
+  if (r.state === 'dev') {
+    setMessage('Updates only apply to an installed copy, not to npm start.');
+  } else if (r.state === 'error') {
+    setMessage(`Could not check for updates: ${r.detail ?? 'no connection?'}`);
+  }
+};
 
 // ---------------------------------------------------------------- boot
 (async () => {

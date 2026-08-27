@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
   installUpdate: () => ipcRenderer.invoke('update:install'),
   onUpdateReady: (cb: (v: string) => void) =>
     ipcRenderer.on('update:ready', (_e, v) => cb(v)),
+  onUpdateState: (cb: (s: { state: string; detail?: string | number }) => void) =>
+    ipcRenderer.on('update:state', (_e, s) => cb(s)),
   onMenu: (cb: (what: 'open' | 'save') => void) => {
     ipcRenderer.on('menu:open', () => cb('open'));
     ipcRenderer.on('menu:save', () => cb('save'));

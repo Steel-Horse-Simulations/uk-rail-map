@@ -34,20 +34,27 @@ function setupUpdates() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
+  const say = (state: string, detail?: string | number) =>
+    win?.webContents.send('update:state', { state, detail });
+
+  autoUpdater.on('checking-for-update', () => say('checking'));
+  autoUpdater.on('update-available', (info) => say('found', info.version));
+  autoUpdater.on('update-not-available', () => say('current'));
+  autoUpdater.on('download-progress', (p) => say('downloading', Math.round(p.percent)));
   autoUpdater.on('update-downloaded', (info) => {
+    say('ready', info.version);
     win?.webContents.send('update:ready', info.version);
   });
-  autoUpdater.on('error', (err) => {
-    win?.webContents.send('update:error', String(err));
-  });
+  autoUpdater.on('error', (err) => say('error', String(err)));
 
   ipcMain.handle('update:install', () => autoUpdater.quitAndInstall());
   ipcMain.handle('update:check', async () => {
+    if (!app.isPackaged) return { state: 'dev' };
     try {
       const r = await autoUpdater.checkForUpdates();
-      return r?.updateInfo.version ?? null;
-    } catch {
-      return null;
+      return { state: 'checked', version: r?.updateInfo.version ?? null };
+    } catch (err) {
+      return { state: 'error', detail: String(err) };
     }
   });
 
@@ -55,6 +62,13 @@ function setupUpdates() {
     autoUpdater.checkForUpdates().catch(() => {
       /* offline is fine */
     });
+    // and again while it is left open, so a release lands without a restart
+    setInterval(
+      () => {
+        autoUpdater.checkForUpdates().catch(() => {});
+      },
+      30 * 60 * 1000,
+    );
   }
 }
 
