@@ -246,9 +246,6 @@ export function renderSvg(opts: RenderOptions): string {
 
   for (const d of drawn) {
     const pts = lanePolyline(d.steps, d.service.id, lanes, toPx, pitch);
-    // run the ends a little past the last station so the line tucks under its
-    // marker instead of stopping a hair short of it
-    extendEnds(pts, theme.lineWidth * 0.66 + 2.6);
     const path = roundedPath(pts, theme.cornerRadius);
     const grey = d.service.routeIds.every((r) => !routeHasServices(doc, r));
     const col = grey ? theme.grey : d.colour;
@@ -284,7 +281,7 @@ export function renderSvg(opts: RenderOptions): string {
 
   // ---- station markers ----------------------------------------------------
   const R = theme.lineWidth * 0.66;
-  const border = 2.6;
+  const border = theme.lineWidth * 0.16;
 
   for (const st of Object.values(doc.stations)) {
     const calling = drawn.filter((d) => d.service.calls.includes(st.id) && d.hits.has(st.id));
@@ -331,8 +328,8 @@ export function renderSvg(opts: RenderOptions): string {
       } else {
         // drawn as the interchange blob is, so the two match in size
         over.push(
-          `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R + border / 2}" fill="${ring}"/>`,
-          `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R}" fill="#ffffff"/>`,
+          `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${(theme.lineWidth * 0.76).toFixed(1)}" fill="${ring}"/>`,
+          `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${(theme.lineWidth * 0.5).toFixed(1)}" fill="#ffffff"/>`,
         );
       }
       continue;
@@ -578,18 +575,6 @@ function dominantSide(ending: Drawn[], centre: Pt, perp: Pt): Pt {
 function terminatesHere(doc: MapDoc, svc: Service, stationId: string): boolean {
   const ids = serviceStations(doc, svc);
   return ids.length > 0 && (ids[0] === stationId || ids[ids.length - 1] === stationId);
-}
-
-/** Push the first and last points outward along their own direction. */
-function extendEnds(pts: { x: number; y: number }[], by: number): void {
-  if (pts.length < 2 || by <= 0) return;
-  const push = (a: { x: number; y: number }, b: { x: number; y: number }) => {
-    const len = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-    a.x += ((a.x - b.x) / len) * by;
-    a.y += ((a.y - b.y) / len) * by;
-  };
-  push(pts[0], pts[1]);
-  push(pts[pts.length - 1], pts[pts.length - 2]);
 }
 
 function labelColour(
