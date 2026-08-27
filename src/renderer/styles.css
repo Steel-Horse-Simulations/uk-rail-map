@@ -14,7 +14,9 @@ input,textarea{user-select:text;-webkit-user-select:text}
 .titlebar .dot{width:10px;height:10px;border-radius:99px;background:#3C4A57}
 .titlebar .name{font-weight:600;color:#E8EFF5;margin-left:4px}
 .titlebar .file{color:#7E93A6}
-.titlebar .badge{margin-left:auto;font-size:11px;color:#8FA3B5;border:1px solid #3A4753;padding:2px 8px;border-radius:99px}
+.themebtn{margin-left:auto;background:none;border:1px solid #3A4753;color:#C9D6E2;border-radius:99px;width:24px;height:24px;font-size:12px;cursor:pointer;line-height:1}
+.themebtn:hover{background:#2A3742}
+.titlebar .badge{margin-left:10px;font-size:11px;color:#8FA3B5;border:1px solid #3A4753;padding:2px 8px;border-radius:99px}
 
 .toolbar{display:flex;align-items:center;gap:4px;padding:7px 10px;background:var(--panel);border-bottom:1px solid var(--rule);flex:none;flex-wrap:wrap}
 .tool{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;padding:5px 10px;border-radius:6px;border:1px solid transparent;background:none;color:#38495A;cursor:pointer;white-space:nowrap}
@@ -101,3 +103,41 @@ input[type=color]{width:100%;height:32px;padding:2px;border:1px solid var(--rule
 .attribution{position:fixed;right:246px;bottom:34px;background:rgba(255,255,255,.82);
   border:1px solid var(--rule);border-radius:4px;padding:2px 7px;font-size:10.5px;color:#4A5A6A}
 .attribution.hidden{display:none}
+
+/* ---------------------------------------------------------------- dark mode
+   The chrome darkens; the map does not. The map is the thing being made, and it
+   is made to be printed on white, so inverting it would show you something you
+   are not building. */
+body.dark{
+  --ink:#E7EEF5; --chrome:#0F161C; --panel:#1A232C; --rule:#2C3946; --muted:#8A9BAC;
+}
+body.dark{background:#141C24;color:var(--ink)}
+body.dark .titlebar{background:#0B1116}
+body.dark .titlebar .badge{border-color:#33424F}
+body.dark .tool{color:#B7C6D4}
+body.dark .tool:hover{background:#243039}
+body.dark .tool.on{background:#2A3742;border-color:#3A4A57;color:#F2F7FB}
+body.dark .tool.acc{background:var(--amber);color:#241701;border-color:#C87C05}
+body.dark li:hover{background:#243039}
+body.dark li.sel{background:#2A3742}
+body.dark input[type=text],
+body.dark select,
+body.dark input[type=color],
+body.dark .seg,
+body.dark .mini,
+body.dark .picklist,
+body.dark .btn{background:#212C36;border-color:var(--rule);color:var(--ink)}
+body.dark .seg button{color:#A9BAC8;background:none}
+body.dark .seg button.on{background:#E7EEF5;color:#141C24}
+body.dark .mini:hover{background:#2A3742}
+body.dark .picklist label{border-bottom-color:#26323C}
+body.dark .picklist label:hover{background:#26323C}
+body.dark .dialog .sheet{background:#1A232C;color:var(--ink)}
+body.dark .dialog{background:rgba(0,0,0,.55)}
+body.dark .oprow{border-color:var(--rule)}
+body.dark .btn.p{background:#E7EEF5;color:#141C24;border-color:#E7EEF5}
+body.dark .status b{color:#C6D4E0}
+body.dark .attribution{background:rgba(20,28,36,.86);border-color:var(--rule);color:#9FB0C0}
+body.dark .addop{border-color:#3A4A57}
+body.dark{background:#141C24}
+body.dark .update{background:#0B1116;color:#E7EEF5;border:1px solid var(--rule)}

@@ -1992,6 +1992,35 @@ $('#towns').onclick = () => {
   draw();
 };
 
+/**
+ * Light or dark chrome. Remembered between sessions, and it follows the system
+ * setting the first time the app runs so it does not start out fighting you.
+ */
+function applyTheme(dark: boolean) {
+  document.body.classList.toggle('dark', dark);
+  $('#theme').innerHTML = dark ? '&#9788;' : '&#9789;';
+  $('#theme').title = dark ? 'Switch to light' : 'Switch to dark';
+  try {
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  } catch {
+    /* not worth failing over */
+  }
+}
+
+$('#theme').onclick = () => applyTheme(!document.body.classList.contains('dark'));
+
+(() => {
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem('theme');
+  } catch {
+    saved = null;
+  }
+  const prefersDark =
+    typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(saved ? saved === 'dark' : prefersDark);
+})();
+
 $('#save').onclick = save;
 $('#export-svg').onclick = async () => {
   const svg = renderSvg({
