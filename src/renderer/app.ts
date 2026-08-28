@@ -10,6 +10,7 @@ import {
   type Operator,
   type Region,
   type Junction,
+  type Node,
   type Service,
   type Station,
 } from '../core/model';
@@ -374,6 +375,7 @@ function draw() {
       doc: d,
       operators: state.project.operators,
       outline: state.project.outline,
+      buildColours: true,
       underlays: gridLayer(),
       overlays: previewLayer() + selectionLayer() + coastLayer() + routeEditLayer(),
     });
@@ -1733,6 +1735,8 @@ wrap.addEventListener('mousemove', (ev) => {
   }
 
   if (state.nodeDrag !== undefined && state.selectedRoute) {
+    // dragging must not leave a leg that is neither square nor diagonal
+
     const d = doc();
     const rt = d.routes[state.selectedRoute];
     const node = rt?.path[state.nodeDrag];
@@ -1746,6 +1750,7 @@ wrap.addEventListener('mousemove', (ev) => {
         const dx = cell.x - anchor.x;
         const dy = cell.y - anchor.y;
         if (dx || dy) st.cells = st.cells.map((k) => ({ x: k.x + dx, y: k.y + dy }));
+        legaliseAround(rt, state.nodeDrag);
       }
     }
     draw();
@@ -1776,6 +1781,28 @@ wrap.addEventListener('mousemove', (ev) => {
   st.cells = st.cells.map((k) => ({ x: k.x + dx, y: k.y + dy }));
   draw();
 });
+
+/**
+ * Put a bend either side of a moved point where the track no longer runs square
+ * or diagonal. Without it a drag can leave a route the renderer has to guess at.
+ */
+function legaliseAround(rt: Route, index: number) {
+  const d = doc();
+  const cellOf = (n: Node) => (n.kind === 'bend' ? n.at : d.stations[n.id]?.cells[0]);
+  for (const [i, j] of [
+    [index - 1, index],
+    [index, index + 1],
+  ]) {
+    const a = rt.path[i];
+    const b = rt.path[j];
+    if (!a || !b) continue;
+    const ca = cellOf(a);
+    const cb = cellOf(b);
+    if (!ca || !cb || isOctilinear(ca, cb)) continue;
+    const bend = elbow(ca, cb);
+    if (bend) rt.path.splice(j, 0, { kind: 'bend', at: bend });
+  }
+}
 
 window.addEventListener('mouseup', () => {
   if (state.dragging) {

@@ -1,6 +1,6 @@
 {
   "name": "uk-rail-map",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Schematic railway map editor for the UK and Ireland",
   "main": "dist/main/main.js",
   "author": "",

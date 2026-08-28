@@ -9,6 +9,7 @@ import { nodeCell } from './model';
 import { outlineSvg } from './outline';
 import {
   buildLanes,
+  elbow,
   lanePolyline,
   roundedPath,
   snap45,
@@ -135,9 +136,26 @@ export function serviceStations(doc: MapDoc, svc: Service): string[] {
   return ids.slice(start, end + 1);
 }
 
+/**
+ * Break a path into steps, mending it as we go.
+ *
+ * Dragging a station can leave a leg that is neither square nor diagonal. That
+ * used to throw, which stopped the entire map drawing over one bad corner. A
+ * corner is inserted instead — the same one the route tool would have added —
+ * so the map always draws and the worst case is a bend you did not choose.
+ */
 function stepsFor(cells: Cell[]): Step[] {
   const out: Step[] = [];
-  for (let i = 0; i + 1 < cells.length; i++) out.push(...unitSteps(cells[i], cells[i + 1]));
+  for (let i = 0; i + 1 < cells.length; i++) {
+    const a = cells[i];
+    const b = cells[i + 1];
+    const bend = elbow(a, b);
+    if (bend) {
+      out.push(...unitSteps(a, bend), ...unitSteps(bend, b));
+    } else {
+      out.push(...unitSteps(a, b));
+    }
+  }
   return out;
 }
 
@@ -149,6 +167,11 @@ export interface RenderOptions {
   basemap?: string;
   /** the editable coastline, drawn behind everything */
   outline?: import('./outline').Outline;
+  /**
+   * While building, a route with no services yet is drawn in its own colour so a
+   * dozen of them in one city stay apart. Everywhere else they are grey.
+   */
+  buildColours?: boolean;
   /** extra layers behind the network (grid, towns) */
   underlays?: string;
   /** extra layers in front (drawing preview, selection) */
@@ -234,8 +257,9 @@ export function renderSvg(opts: RenderOptions): string {
     if (cells.length < 2) continue;
     let d = `M ${(cells[0].x * cs).toFixed(1)} ${(cells[0].y * cs).toFixed(1)}`;
     for (const c of cells.slice(1)) d += ` L ${(c.x * cs).toFixed(1)} ${(c.y * cs).toFixed(1)}`;
+    const col = (opts.buildColours && rt.buildColour) || theme.grey;
     baseLines.push(
-      `<path d="${d}" fill="none" stroke="${theme.grey}" stroke-width="${theme.lineWidth}" stroke-linejoin="round" stroke-linecap="round"/>`,
+      `<path d="${d}" fill="none" stroke="${col}" stroke-width="${theme.lineWidth}" stroke-linejoin="round" stroke-linecap="round"/>`,
     );
   }
 
@@ -288,16 +312,18 @@ export function renderSvg(opts: RenderOptions): string {
     const passing = drawn.filter((d) => !d.service.calls.includes(st.id) && d.hits.has(st.id));
     // a station with no service yet still needs to be on the map
     if (calling.length === 0 && passing.length === 0) {
+      const own = opts.buildColours ? buildColourFor(doc, st) : undefined;
+      const greyish = own ?? theme.grey;
       const bar = stationExtent(st, cs);
       if (bar) {
         over.push(
-          `<line x1="${bar[0].x}" y1="${bar[0].y}" x2="${bar[1].x}" y2="${bar[1].y}" stroke="${theme.grey}" stroke-width="${2 * R + 2 * border}" stroke-linecap="round"/>`,
+          `<line x1="${bar[0].x}" y1="${bar[0].y}" x2="${bar[1].x}" y2="${bar[1].y}" stroke="${greyish}" stroke-width="${2 * R + 2 * border}" stroke-linecap="round"/>`,
           `<line x1="${bar[0].x}" y1="${bar[0].y}" x2="${bar[1].x}" y2="${bar[1].y}" stroke="#ffffff" stroke-width="${2 * R}" stroke-linecap="round"/>`,
         );
       } else {
         const p = toPx(st.cells[0]);
         over.push(
-          `<circle cx="${p.x}" cy="${p.y}" r="${R}" fill="#ffffff" stroke="${theme.grey}" stroke-width="${border}"/>`,
+          `<circle cx="${p.x}" cy="${p.y}" r="${R}" fill="#ffffff" stroke="${greyish}" stroke-width="${border}"/>`,
         );
       }
       continue;
@@ -575,6 +601,17 @@ function dominantSide(ending: Drawn[], centre: Pt, perp: Pt): Pt {
 function terminatesHere(doc: MapDoc, svc: Service, stationId: string): boolean {
   const ids = serviceStations(doc, svc);
   return ids.length > 0 && (ids[0] === stationId || ids[ids.length - 1] === stationId);
+}
+
+/** The build colour of the first serviceless route this station sits on. */
+function buildColourFor(doc: MapDoc, st: Station): string | undefined {
+  for (const rt of Object.values(doc.routes)) {
+    if (!rt.buildColour) continue;
+    if (!rt.path.some((n) => n.kind === 'station' && n.id === st.id)) continue;
+    if (Object.values(doc.services).some((s) => s.routeIds.includes(rt.id))) continue;
+    return rt.buildColour;
+  }
+  return undefined;
 }
 
 function labelColour(
