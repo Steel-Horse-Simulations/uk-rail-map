@@ -143,3 +143,10 @@ body.dark .attribution{background:rgba(20,28,36,.86);border-color:var(--rule);co
 body.dark .addop{border-color:#3A4A57}
 body.dark{background:#141C24}
 body.dark .update{background:#0B1116;color:#E7EEF5;border:1px solid var(--rule)}
+
+/* the overview window reuses the editor's chrome, without the side panels */
+body.overview .body{min-height:0}
+body.overview #canvas-wrap{cursor:default}
+
+.twig{color:#9AA8B6;margin-right:-3px;font-size:12px}
+body.dark .twig{color:#6C7C8C}

@@ -9,7 +9,6 @@ const fs = require('fs');
 const path = require('path');
 
 const outline = JSON.parse(fs.readFileSync('assets/outline.json', 'utf8'));
-const places = JSON.parse(fs.readFileSync('assets/places.json', 'utf8'));
 const projection = JSON.parse(fs.readFileSync('assets/projection.json', 'utf8'));
 const xs = outline.shapes.flatMap((s) => s.ring.map((p) => p.x));
 const ys = outline.shapes.flatMap((s) => s.ring.map((p) => p.y));
@@ -25,10 +24,10 @@ fs.writeFileSync(
     `export const OUTLINE: Outline = ${JSON.stringify(outline)};\n` +
     `export const BASEMAP_W = ${w};\nexport const BASEMAP_H = ${h};\n` +
     `export const PROJECTION = ${JSON.stringify(projection)} as {\n` +
-    `  unit: number; scale: number; lat0: number; minx: number; miny: number;\n};\n` +
-    `export const PLACES: { n: string; x: number; y: number; p: number; t: number }[] = ${JSON.stringify(places.places)};\n`,
+    `  unit: number; scale: number; lat0: number; minx: number; miny: number;\n};\n`,
+    '',
 );
 console.log(
-  `embedded outline (${outline.shapes.length} shapes, ` +
-    `${outline.shapes.reduce((n, s) => n + s.ring.length, 0)} points) and ${places.places.length} places`,
+  `embedded outline: ${outline.shapes.length} shapes, ` +
+    `${outline.shapes.reduce((n, s) => n + s.ring.length, 0)} points`,
 );

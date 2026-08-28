@@ -1,13 +1,13 @@
 {
   "name": "uk-rail-map",
-  "version": "0.9.14",
+  "version": "0.12.0",
   "description": "Schematic railway map editor for the UK and Ireland",
   "main": "dist/main/main.js",
   "author": "",
   "license": "MIT",
   "scripts": {
     "build:main": "esbuild src/main/main.ts src/main/preload.ts --bundle --platform=node --external:electron --external:electron-updater --outdir=dist/main --format=cjs",
-    "build:renderer": "npm run embed && esbuild src/renderer/app.ts --bundle --platform=browser --outfile=dist/renderer/app.js && node scripts/copy-static.js",
+    "build:renderer": "npm run embed && esbuild src/renderer/app.ts src/renderer/overview.ts --bundle --platform=browser --outdir=dist/renderer && node scripts/copy-static.js",
     "build": "npm run build:main && npm run build:renderer",
     "start": "npm run build && electron .",
     "typecheck": "npm run embed && tsc --noEmit",

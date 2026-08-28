@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 let win: BrowserWindow | null = null;
+let overview: BrowserWindow | null = null;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -25,6 +26,54 @@ function createWindow() {
     win = null;
   });
 }
+
+// ---------------------------------------------------------------- overview
+// A second window for a second monitor. It only watches: the editor pushes its
+// project across and that window redraws. Opening it on the display the editor
+// is not on saves dragging it over every time.
+function createOverview() {
+  if (overview && !overview.isDestroyed()) {
+    overview.focus();
+    return;
+  }
+  const displays = screen.getAllDisplays();
+  const here = win ? screen.getDisplayMatching(win.getBounds()) : screen.getPrimaryDisplay();
+  const other = displays.find((d) => d.id !== here.id) ?? here;
+  const area = other.workArea;
+
+  overview = new BrowserWindow({
+    x: area.x + 40,
+    y: area.y + 40,
+    width: Math.min(1200, area.width - 80),
+    height: Math.min(900, area.height - 80),
+    title: 'UK Rail Map — overview',
+    backgroundColor: '#E4F3F9',
+    icon: path.join(__dirname, '../../build/icon.ico'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  overview.loadFile(path.join(__dirname, '../renderer/overview.html'));
+  overview.on('closed', () => {
+    overview = null;
+    win?.webContents.send('overview:closed');
+  });
+}
+
+ipcMain.handle('overview:open', () => {
+  createOverview();
+  return true;
+});
+ipcMain.handle('overview:close', () => {
+  overview?.close();
+  return true;
+});
+ipcMain.handle('overview:isOpen', () => Boolean(overview && !overview.isDestroyed()));
+ipcMain.on('overview:data', (_e, payload) => {
+  if (overview && !overview.isDestroyed()) overview.webContents.send('overview:data', payload);
+});
 
 // ---------------------------------------------------------------- updates
 //
@@ -110,16 +159,6 @@ ipcMain.handle('basemap:read', async () => {
   }
 });
 
-ipcMain.handle('places:read', async () => {
-  const p = app.isPackaged
-    ? path.join(process.resourcesPath, 'assets', 'places.json')
-    : path.join(__dirname, '../../assets/places.json');
-  try {
-    return JSON.parse(await fs.readFile(p, 'utf8')) as { places: unknown[] };
-  } catch {
-    return { places: [] };
-  }
-});
 
 ipcMain.handle('export:svg', async (_e, svg: string) => {
   const res = await dialog.showSaveDialog(win!, {

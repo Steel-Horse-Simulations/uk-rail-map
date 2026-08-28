@@ -63,6 +63,25 @@ export interface Station {
 
 export type LineStyle = 'main' | 'metro' | 'heritage' | 'construction' | 'ferry' | 'bus';
 
+/**
+ * Where a branch meets a route it belongs to.
+ *
+ * A branch usually joins once, facing one way. Where trains can come off in either
+ * direction it joins twice, the second being the short curve of a triangular
+ * junction — so `stub` marks the connection that is drawn as that curve rather
+ * than as the branch's own running line.
+ */
+export interface Junction {
+  /** The route being joined. A branch may belong to more than one. */
+  routeId: string;
+  /** Where it joins: a station on that route, or a bare point on its track. */
+  at: { kind: 'station'; id: string } | { kind: 'point'; cell: Cell };
+  /** Which end of the branch this junction is at. */
+  end: 'start' | 'finish';
+  /** The second, short connection of a triangular junction. */
+  stub?: boolean;
+}
+
 export interface Route {
   id: string;
   name: string;
@@ -70,6 +89,18 @@ export interface Route {
   path: Node[];
   /** Segment index -> locked. A locked stretch will not be moved by re-layout. */
   lockedSegments?: number[];
+  /**
+   * Routes this one branches from. Empty or absent for a main route. A branch can
+   * belong to several parents, and can itself be branched from.
+   */
+  junctions?: Junction[];
+  /** Shown nested under this route in the list. */
+  parentId?: string;
+  /**
+   * A colour of its own while building, so a dozen routes in one city stay
+   * distinguishable. Never used once services run over it — they bring their own.
+   */
+  buildColour?: string;
 }
 
 export interface OneWayRun {
@@ -155,11 +186,30 @@ export interface Project {
   activeMapId: string;
 }
 
+/** The two that were always going to be needed first. */
+function defaultOperators(): Record<string, Operator> {
+  return {
+    scotrail: {
+      id: 'scotrail',
+      name: 'ScotRail',
+      colour: '#2E3092',
+      website: 'scotrail.co.uk',
+      regions: ['sco'],
+    },
+    'caledonian-sleeper': {
+      id: 'caledonian-sleeper',
+      name: 'Caledonian Sleeper',
+      colour: '#0A736C',
+      regions: ['sco'],
+    },
+  };
+}
+
 export function emptyProject(name = 'Untitled map'): Project {
   return {
     version: 1,
     name,
-    operators: {},
+    operators: defaultOperators(),
     maps: {
       rail: {
         id: 'rail',

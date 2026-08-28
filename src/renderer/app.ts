@@ -9,12 +9,13 @@ import {
   operatorRegions,
   type Operator,
   type Region,
+  type Junction,
   type Service,
   type Station,
 } from '../core/model';
 import { renderSvg, serviceStations } from '../core/render';
 import { elbow, isOctilinear, snapOctilinear, unitSteps } from '../core/geometry';
-import { BASEMAP_H, BASEMAP_W, OUTLINE, PLACES, PROJECTION } from '../generated/assets';
+import { BASEMAP_H, BASEMAP_W, OUTLINE } from '../generated/assets';
 import {
   deletePoint,
   insertPoint,
@@ -22,22 +23,12 @@ import {
   type Outline,
 } from '../core/outline';
 
-/** A town or city from the overlay: name, position, population, tier. */
-export interface Place {
-  n: string;
-  x: number;
-  y: number;
-  p: number;
-  t: number;
-}
-
 declare global {
   interface Window {
     api: {
       saveProject(json: string, current?: string): Promise<string | null>;
       openProject(): Promise<{ path: string; json: string } | null>;
       readBasemap(): Promise<string>;
-      readPlaces(): Promise<{ places: Place[] }>;
       exportSvg(svg: string): Promise<string | null>;
       exportPdf(svg: string, w: number, h: number): Promise<string | null>;
       version(): Promise<string>;
@@ -46,6 +37,11 @@ declare global {
       onUpdateReady(cb: (v: string) => void): void;
       onUpdateState(cb: (s: { state: string; detail?: string | number }) => void): void;
       onMenu(cb: (what: 'open' | 'save') => void): void;
+      openOverview(): Promise<boolean>;
+      closeOverview(): Promise<boolean>;
+      overviewIsOpen(): Promise<boolean>;
+      sendOverview(payload: unknown): void;
+      onOverviewClosed(cb: () => void): void;
     };
   }
 }
@@ -55,7 +51,6 @@ type Tool = 'select' | 'station' | 'route' | 'redit' | 'pan' | 'coast';
 const state = {
   project: emptyProject('UK network'),
   filePath: undefined as string | undefined,
-  places: [] as Place[],
   /** which coastline point is being dragged, if any */
   coastDrag: undefined as { shapeId: string; index: number } | undefined,
   coastPick: undefined as { shapeId: string; index: number } | undefined,
@@ -66,17 +61,15 @@ const state = {
   zoom: 0.025,
   pan: { x: 0, y: 0 },
   showGrid: true,
-  showTowns: false,
-  /** the real railway map behind the schematic, for lining things up */
-  showTiles: false,
-  tileOpacity: 0.55,
-  /** minimum population a town needs before it is drawn */
-  townFloor: 30000,
+  overviewOpen: false,
   selectedStation: undefined as string | undefined,
   selectedRoute: undefined as string | undefined,
   selectedService: undefined as string | undefined,
   /** what the right-hand panel is showing */
   focus: 'station' as 'station' | 'route' | 'service',
+  /** set while drawing a branch: which route it leaves, and whether it is the second curve */
+  branchOf: undefined as { parentId: string; stub: boolean; branchId?: string } | undefined,
+  branchJunction: undefined as Junction['at'] | undefined,
   /** the route being drawn: stations, plus any bends you place yourself */
   drawing: [] as ({ kind: 'station'; id: string } | { kind: 'bend'; at: Cell })[],
   /** per leg of the route being drawn: take the diagonal first, or the straight */
@@ -132,80 +125,6 @@ function cellTaken(c: Cell): string | undefined {
 }
 
 
-// ---------------------------------------------------------------- real map
-// A tile layer behind the schematic, so you can see where the railway actually
-// goes while you draw it. OpenStreetMap underneath, OpenRailwayMap's gauge style
-// on top. It is a drawing aid only — draw() puts it in as an underlay, and the
-// export path never asks for underlays, so it cannot end up in a saved file.
-const LON_K = Math.cos((PROJECTION.lat0 * Math.PI) / 180) * PROJECTION.scale;
-
-function mapToLonLat(x: number, y: number) {
-  return {
-    lon: (x / PROJECTION.unit + PROJECTION.minx) / LON_K,
-    lat: -(y / PROJECTION.unit + PROJECTION.miny) / PROJECTION.scale,
-  };
-}
-
-function lonLatToMap(lon: number, lat: number) {
-  return {
-    x: (lon * LON_K - PROJECTION.minx) * PROJECTION.unit,
-    y: (-lat * PROJECTION.scale - PROJECTION.miny) * PROJECTION.unit,
-  };
-}
-
-const tileLat = (yTile: number, z: number) => {
-  const n = Math.PI - (2 * Math.PI * yTile) / Math.pow(2, z);
-  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
-};
-
-function tileLayer(): string {
-  if (!state.showTiles) return '';
-  const v = view();
-  const nw = mapToLonLat(v.ox, v.oy);
-  const se = mapToLonLat(v.ox + v.vw, v.oy + v.vh);
-
-  // pick the zoom that puts a tile at roughly its natural size on screen
-  const pxPerDegLon = LON_K * PROJECTION.unit * state.zoom;
-  let z = Math.round(Math.log2((360 * pxPerDegLon) / 256));
-  z = Math.max(5, Math.min(16, z));
-  const n = Math.pow(2, z);
-
-  const xFor = (lon: number) => Math.floor(((lon + 180) / 360) * n);
-  const yFor = (lat: number) => {
-    const r = (lat * Math.PI) / 180;
-    return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n);
-  };
-
-  const x0 = Math.max(0, xFor(nw.lon) - 1);
-  const x1 = Math.min(n - 1, xFor(se.lon) + 1);
-  const y0 = Math.max(0, yFor(nw.lat) - 1);
-  const y1 = Math.min(n - 1, yFor(se.lat) + 1);
-  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 260) {
-    setMessage('Zoom in a little for the railway map to load.');
-    return '';
-  }
-
-  const out: string[] = [`<g opacity="${state.tileOpacity}">`];
-  for (let ty = y0; ty <= y1; ty++) {
-    for (let tx = x0; tx <= x1; tx++) {
-      const lonA = (tx / n) * 360 - 180;
-      const lonB = ((tx + 1) / n) * 360 - 180;
-      const a = lonLatToMap(lonA, tileLat(ty, z));
-      const b = lonLatToMap(lonB, tileLat(ty + 1, z));
-      const w = b.x - a.x;
-      const h = b.y - a.y;
-      if (w <= 0 || h <= 0) continue;
-      const box = `x="${a.x.toFixed(1)}" y="${a.y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}"`;
-      out.push(
-        `<image ${box} href="https://tile.openstreetmap.org/${z}/${tx}/${ty}.png" preserveAspectRatio="none"/>`,
-        `<image ${box} href="https://a.tiles.openrailwaymap.org/gauge/${z}/${tx}/${ty}.png" preserveAspectRatio="none"/>`,
-      );
-    }
-  }
-  out.push('</g>');
-  return out.join('');
-}
-
 // ---------------------------------------------------------------- layers
 function gridLayer(): string {
   if (!state.showGrid) return '';
@@ -225,31 +144,7 @@ function gridLayer(): string {
   return `<path d="${out.join(' ')}" stroke="#B9D5E4" stroke-width="${(0.7 / state.zoom).toFixed(2)}" fill="none" opacity="0.65"/>`;
 }
 
-function visibleTowns(): Place[] {
-  if (!state.showTowns) return [];
-  return state.places.filter((p) => p.p >= state.townFloor);
-}
 
-function townsLayer(): string {
-  const list = visibleTowns();
-  if (!list.length) return '';
-  const k = 1 / state.zoom;
-  const out: string[] = [];
-  for (const pl of list) {
-    const big = pl.p >= 200000;
-    out.push(
-      `<circle cx="${pl.x}" cy="${pl.y}" r="${((big ? 4.4 : 3) * k).toFixed(2)}" fill="#7C8A98" opacity="0.8"/>`,
-    );
-    // labels only where they will not turn into a smear
-    if (list.length <= 400 || big) {
-      const fs = (big ? 15 : 12) * k;
-      out.push(
-        `<text x="${(pl.x + 6 * k).toFixed(1)}" y="${(pl.y + 4 * k).toFixed(1)}" font-size="${fs.toFixed(1)}" font-weight="${big ? 700 : 400}" fill="#546474" stroke="#ffffff" stroke-width="${(3 * k).toFixed(2)}" paint-order="stroke">${esc(pl.n)}</text>`,
-      );
-    }
-  }
-  return `<g class="towns">${out.join('')}</g>`;
-}
 
 /**
  * Turn the picked stations into a legal path, inserting a bend wherever two
@@ -479,7 +374,7 @@ function draw() {
       doc: d,
       operators: state.project.operators,
       outline: state.project.outline,
-      underlays: tileLayer() + gridLayer() + townsLayer(),
+      underlays: gridLayer(),
       overlays: previewLayer() + selectionLayer() + coastLayer() + routeEditLayer(),
     });
   } catch (err) {
@@ -495,11 +390,10 @@ function draw() {
     el.setAttribute('preserveAspectRatio', 'xMinYMin slice');
   }
 
+  pushOverview();
   $('#counts').textContent =
     `${Object.keys(d.stations).length} stations · ${Object.keys(d.routes).length} routes · ${Object.keys(d.services).length} services`;
   $('#zoom').textContent = `${Math.round(state.zoom * 100)}%`;
-  const shown = visibleTowns().length;
-  $('#town-count').textContent = state.showTowns ? `${shown} towns` : '';
 }
 
 /** Panels are rebuilt separately, so typing in a field never rips it out mid-keystroke. */
@@ -555,7 +449,6 @@ function renderInspector() {
   if (!st) {
     insp.innerHTML =
       '<h2>Nothing selected</h2><p class="hint">Click the canvas with the Station tool to place one. ' +
-      'With Towns on, clicking a town places a station already named after it.<br><br>' +
       'Hold space or use the Pan tool to move around. Scroll to zoom.</p>';
     return;
   }
@@ -721,6 +614,53 @@ function renderInspector() {
 }
 
 
+
+
+// ---------------------------------------------------------------- branches
+/**
+ * Drawing a branch.
+ *
+ * A branch is an ordinary route that knows where it leaves its parent. The first
+ * click sets the junction — a station on the parent, or a bare point on its track
+ * — and drawing carries on as normal. A second connection can be added later for
+ * a triangular junction, where trains can come off either way.
+ */
+function startBranch(parentId: string, stub: boolean, existingBranchId?: string) {
+  state.tool = 'route';
+  document.querySelectorAll('.tool[data-tool]').forEach((x) => x.classList.remove('on'));
+  document.querySelector('.tool[data-tool="route"]')?.classList.add('on');
+  cancelRoute();
+  state.branchOf = { parentId, stub, branchId: existingBranchId };
+  setMessage(
+    stub
+      ? 'Click where the second curve leaves the parent, then draw it.'
+      : `Click where the branch leaves ${doc().routes[parentId]?.name ?? 'the route'}, then draw it.`,
+  );
+  draw();
+  renderPanels();
+}
+
+/** Is this cell on the given route — at a station or on its track? */
+function pointOnRoute(routeId: string, cell: Cell): Junction['at'] | null {
+  const d = doc();
+  const rt = d.routes[routeId];
+  if (!rt) return null;
+  const station = cellTaken(cell);
+  if (station && rt.path.some((n) => n.kind === 'station' && n.id === station)) {
+    return { kind: 'station', id: station };
+  }
+  const pts = rt.path.map((n) => (n.kind === 'bend' ? n.at : d.stations[n.id]?.cells[0]));
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    if (!a || !b) continue;
+    for (const step of unitSteps(a, b)) {
+      if (step.a.x === cell.x && step.a.y === cell.y) return { kind: 'point', cell };
+      if (step.b.x === cell.x && step.b.y === cell.y) return { kind: 'point', cell };
+    }
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------- infill
 /**
@@ -1081,10 +1021,29 @@ function renderRouteInspector() {
     </div>
     <p class="hint">Pick the <b>Edit route</b> tool to drag these on the map. Click a leg to add a
     bend, Delete to remove one. Shift-click a station to add it to the end, alt-click for the start.</p>
+    ${
+      rt.junctions?.length
+        ? `<label class="f">Joins</label>
+           <div class="picklist">
+             ${rt.junctions
+               .map((j) => {
+                 const parent = d.routes[j.routeId];
+                 const where =
+                   j.at.kind === 'station'
+                     ? esc(d.stations[j.at.id]?.name ?? 'a station')
+                     : `${j.at.cell.x}, ${j.at.cell.y}`;
+                 return `<label>${esc(parent?.name ?? 'a route')} at ${where}${j.stub ? ' &middot; second curve' : ''}</label>`;
+               })
+               .join('')}
+           </div>
+           <button class="mini" id="rjoin2">Add another connection</button>`
+        : ''
+    }
     <div class="rowbtns">
       <button class="mini" id="rrev">Reverse</button>
       <button class="mini" id="rfill">Add stations</button>
     </div>
+    <button class="mini" id="rbranch">Add a branch from this route</button>
     <button class="mini" id="rsvc">Add service</button>
     <button class="mini" id="rdel">Delete route</button>
   `;
@@ -1105,6 +1064,9 @@ function renderRouteInspector() {
     };
   });
   ($('#rfill') as HTMLButtonElement).onclick = openInfill;
+  ($('#rbranch') as HTMLButtonElement).onclick = () => startBranch(rt.id, false);
+  const join2 = document.querySelector('#rjoin2') as HTMLButtonElement | null;
+  if (join2) join2.onclick = () => startBranch(rt.junctions![0].routeId, true, rt.id);
   ($('#rrev') as HTMLButtonElement).onclick = () => {
     rt.path.reverse();
     state.nodePick = undefined;
@@ -1114,6 +1076,13 @@ function renderRouteInspector() {
   };
   ($('#rsvc') as HTMLButtonElement).onclick = addServiceToSelectedRoute;
   ($('#rdel') as HTMLButtonElement).onclick = () => {
+    // branches outlive their parent: they lose the junction, not their track
+    for (const other of Object.values(d.routes)) {
+      if (other.parentId === rt.id) other.parentId = undefined;
+      if (other.junctions?.some((j) => j.routeId === rt.id)) {
+        other.junctions = other.junctions.filter((j) => j.routeId !== rt.id);
+      }
+    }
     delete d.routes[rt.id];
     for (const sv of Object.values(d.services)) {
       sv.routeIds = sv.routeIds.filter((r) => r !== rt.id);
@@ -1342,12 +1311,15 @@ function refreshLists() {
   const d = doc();
   const routes = $('#routes');
   routes.innerHTML = '';
-  for (const rt of Object.values(d.routes)) {
+
+  const addRow = (rt: Route, depth: number) => {
     const svcCount = Object.values(d.services).filter((s) => s.routeIds.includes(rt.id)).length;
     const li = document.createElement('li');
     if (rt.id === state.selectedRoute && state.focus === 'route') li.className = 'sel';
+    li.style.paddingLeft = `${9 + depth * 16}px`;
+    const branch = depth > 0 ? '<span class="twig">&#8627;</span>' : '';
     li.innerHTML =
-      `<span class="bar" style="background:#9AA8B6"></span>${esc(rt.name)}` +
+      `${branch}<span class="bar" style="background:${routeColour(rt)}"></span>${esc(rt.name)}` +
       `<span class="tag">${svcCount ? `${svcCount} svc` : 'no services'}</span>`;
     li.onclick = () => {
       state.selectedRoute = rt.id;
@@ -1355,7 +1327,17 @@ function refreshLists() {
       renderPanels();
     };
     routes.appendChild(li);
+    for (const child of Object.values(d.routes)) {
+      if (child.parentId === rt.id) addRow(child, depth + 1);
+    }
+  };
+
+  for (const rt of Object.values(d.routes)) {
+    // a branch whose parent is gone is shown at the top level rather than hidden
+    if (!rt.parentId || !d.routes[rt.parentId]) addRow(rt, 0);
   }
+  $('#routes-empty').style.display = Object.keys(d.routes).length ? 'none' : '';
+
   const services = $('#services');
   services.innerHTML = '';
   Object.values(d.services)
@@ -1373,7 +1355,15 @@ function refreshLists() {
       };
       services.appendChild(li);
     });
+  $('#services-empty').style.display = Object.keys(d.services).length ? 'none' : '';
   draw();
+}
+
+/** A route's own colour while building; grey once it is only a carrier of services. */
+function routeColour(rt: Route): string {
+  const d = doc();
+  const used = Object.values(d.services).some((s) => s.routeIds.includes(rt.id));
+  return used ? '#9AA8B6' : (rt.buildColour ?? '#9AA8B6');
 }
 
 // ---------------------------------------------------------------- operators
@@ -1567,22 +1557,6 @@ function wantsPan(ev: MouseEvent): boolean {
   return state.tool === 'pan' || state.spaceHeld || ev.button === 1 || ev.shiftKey;
 }
 
-/** Nearest town to a click, if the towns layer is on and one is close enough. */
-function townAt(ev: MouseEvent): Place | undefined {
-  if (!state.showTowns) return undefined;
-  const m = screenToMap(ev);
-  const reach = 14 / state.zoom;
-  let best: Place | undefined;
-  let bestD = reach;
-  for (const p of visibleTowns()) {
-    const d = Math.hypot(p.x - m.x, p.y - m.y);
-    if (d < bestD) {
-      bestD = d;
-      best = p;
-    }
-  }
-  return best;
-}
 
 wrap.addEventListener('mousedown', (ev) => {
   ev.preventDefault(); // stops the browser starting a text selection drag
@@ -1672,10 +1646,9 @@ wrap.addEventListener('mousedown', (ev) => {
       state.focus = 'station';
       if (!doc().stations[hit].locked) state.dragging = hit;
     } else {
-      const town = townAt(ev);
       const st: Station = {
         id: newId('st'),
-        name: town ? town.n : 'New station',
+        name: 'New station',
         cells: [c],
         kind: 'stop',
         interchange: false,
@@ -1683,7 +1656,6 @@ wrap.addEventListener('mousedown', (ev) => {
       doc().stations[st.id] = st;
       state.selectedStation = st.id;
       state.focus = 'station';
-      if (town) setMessage(`Placed ${town.n}.`);
     }
     draw();
     renderPanels();
@@ -1691,6 +1663,23 @@ wrap.addEventListener('mousedown', (ev) => {
   }
 
   if (state.tool === 'route') {
+    // the opening click of a branch is its junction with the parent
+    if (state.branchOf && state.drawing.length === 0) {
+      const at = pointOnRoute(state.branchOf.parentId, c);
+      if (!at) {
+        setMessage('Click a station or a point on the route this branches from.');
+        return;
+      }
+      state.branchJunction = at;
+      state.drawing.push(
+        at.kind === 'station' ? { kind: 'station', id: at.id } : { kind: 'bend', at: c },
+      );
+      $('#cancel-route').classList.remove('hidden');
+      setMessage('Junction set. Now draw the branch — stations and bends as usual.');
+      draw();
+      return;
+    }
+
     const last = state.drawing[state.drawing.length - 1];
     const cellOf = (n: DrawNode) => (n.kind === 'bend' ? n.at : doc().stations[n.id].cells[0]);
 
@@ -1914,6 +1903,8 @@ function flipLastBend() {
 $('#flip-bend').onclick = flipLastBend;
 
 function cancelRoute() {
+  state.branchOf = undefined;
+  state.branchJunction = undefined;
   state.drawing = [];
   state.bendFlips = [];
   $('#flip-bend').classList.add('hidden');
@@ -1928,12 +1919,45 @@ $('#finish-route').onclick = () => {
     setMessage('A route needs at least two stations.');
     return;
   }
+  const d = doc();
+  const branch = state.branchOf;
+  const palette = ['#0A55C4', '#0E8A3E', '#E2620E', '#7A2E8E', '#C4161C', '#0E8C8C', '#B58B00', '#C6216B'];
+
+  if (branch?.branchId && d.routes[branch.branchId]) {
+    // a second connection: the short curve of a triangular junction
+    const existing = d.routes[branch.branchId];
+    existing.junctions = [
+      ...(existing.junctions ?? []),
+      {
+        routeId: branch.parentId,
+        at: state.branchJunction ?? { kind: 'point', cell: { x: 0, y: 0 } },
+        end: 'start',
+        stub: true,
+      },
+    ];
+    state.selectedRoute = existing.id;
+    cancelRoute();
+    setMessage(`Second connection added to ${existing.name}.`);
+    draw();
+    renderPanels();
+    return;
+  }
+
   const rt: Route = {
     id: newId('rt'),
-    name: `Route ${Object.keys(doc().routes).length + 1}`,
+    name: branch
+      ? `${d.routes[branch.parentId]?.name ?? 'Route'} branch`
+      : `Route ${Object.keys(d.routes).length + 1}`,
     style: 'main',
     path: buildPath(state.drawing, state.bendFlips),
+    buildColour: palette[Object.keys(d.routes).length % palette.length],
   };
+  if (branch && state.branchJunction) {
+    rt.parentId = branch.parentId;
+    rt.junctions = [
+      { routeId: branch.parentId, at: state.branchJunction, end: 'start', stub: branch.stub },
+    ];
+  }
   doc().routes[rt.id] = rt;
   state.selectedRoute = rt.id;
   cancelRoute();
@@ -1971,81 +1995,9 @@ $('#grid').onclick = () => {
   draw();
 };
 
-$('#tiles').onclick = () => {
-  state.showTiles = !state.showTiles;
-  $('#tiles').classList.toggle('on', state.showTiles);
-  $('#tile-slider-wrap').classList.toggle('hidden', !state.showTiles);
-  $('#attribution').classList.toggle('hidden', !state.showTiles);
-  setMessage(
-    state.showTiles
-      ? 'Railway map shown. It is a guide only and never appears in an export.'
-      : 'Railway map hidden.',
-  );
-  draw();
-};
 
-($('#tile-slider') as HTMLInputElement).oninput = (e) => {
-  state.tileOpacity = Number((e.target as HTMLInputElement).value) / 100;
-  draw();
-};
 
-$('#towns').onclick = () => {
-  state.showTowns = !state.showTowns;
-  $('#towns').classList.toggle('on', state.showTowns);
-  $('#town-slider-wrap').classList.toggle('hidden', !state.showTowns);
-  draw();
-};
 
-/**
- * The slider is a population floor, not a count: sliding right raises the bar so
- * only larger places survive. Curved so the useful range is not all bunched up
- * at one end, since town sizes are wildly uneven.
- */
-($('#town-slider') as HTMLInputElement).oninput = (e) => {
-  const v = Number((e.target as HTMLInputElement).value) / 100;
-  state.townFloor = Math.round(500 * Math.pow(2000, v));
-  draw();
-};
-
-/**
- * Light or dark chrome. Remembered between sessions, and it follows the system
- * setting the first time the app runs so it does not start out fighting you.
- */
-function applyTheme(dark: boolean) {
-  document.body.classList.toggle('dark', dark);
-  $('#theme').innerHTML = dark ? '&#9788;' : '&#9789;';
-  $('#theme').title = dark ? 'Switch to light' : 'Switch to dark';
-  try {
-    localStorage.setItem('theme', dark ? 'dark' : 'light');
-  } catch {
-    /* not worth failing over */
-  }
-}
-
-$('#theme').onclick = () => applyTheme(!document.body.classList.contains('dark'));
-
-(() => {
-  let saved: string | null = null;
-  try {
-    saved = localStorage.getItem('theme');
-  } catch {
-    saved = null;
-  }
-  const prefersDark =
-    typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
-  applyTheme(saved ? saved === 'dark' : prefersDark);
-})();
-
-$('#save').onclick = save;
-$('#export-svg').onclick = async () => {
-  const svg = renderSvg({
-    doc: doc(),
-    operators: state.project.operators,
-    outline: state.project.outline,
-  });
-  const p = await window.api.exportSvg(svg);
-  if (p) setMessage(`Exported to ${p}`);
-};
 
 async function save() {
   const p = await window.api.saveProject(JSON.stringify(state.project, null, 2), state.filePath);
@@ -2067,6 +2019,28 @@ function fitToMap() {
 }
 
 const CELL = 10;
+
+/** ScotRail and the Sleeper are there from the start, on any map. */
+function seedOperators() {
+  const ops = state.project.operators;
+  if (!ops.scotrail) {
+    ops.scotrail = {
+      id: 'scotrail',
+      name: 'ScotRail',
+      colour: '#2E3092',
+      website: 'scotrail.co.uk',
+      regions: ['sco'],
+    };
+  }
+  if (!ops['caledonian-sleeper']) {
+    ops['caledonian-sleeper'] = {
+      id: 'caledonian-sleeper',
+      name: 'Caledonian Sleeper',
+      colour: '#0A736C',
+      regions: ['sco'],
+    };
+  }
+}
 
 /**
  * Keep the grid fine.
@@ -2095,6 +2069,41 @@ function rescaleIfNeeded() {
   }
 }
 
+// ---------------------------------------------------------------- overview
+// Pushed rather than polled, and held back a moment so a drag does not send a
+// copy of the project on every mouse move.
+let overviewTimer: ReturnType<typeof setTimeout> | undefined;
+function pushOverview() {
+  if (!state.overviewOpen) return;
+  if (overviewTimer) clearTimeout(overviewTimer);
+  overviewTimer = setTimeout(() => {
+    const v = view();
+    window.api.sendOverview({
+      project: state.project,
+      view: { x: v.ox, y: v.oy, w: v.vw, h: v.vh },
+    });
+  }, 180);
+}
+
+async function setOverview(open: boolean) {
+  state.overviewOpen = open;
+  if (open) await window.api.openOverview();
+  else await window.api.closeOverview();
+  $('#overview').classList.toggle('on', open);
+  try {
+    localStorage.setItem('overview', open ? 'open' : 'closed');
+  } catch {
+    /* nothing worth failing over */
+  }
+  if (open) pushOverview();
+}
+
+$('#overview').onclick = () => setOverview(!state.overviewOpen);
+window.api.onOverviewClosed(() => {
+  state.overviewOpen = false;
+  $('#overview').classList.remove('on');
+});
+
 function setMessage(m: string) {
   $('#msg').textContent = m;
 }
@@ -2109,6 +2118,7 @@ window.api.onMenu(async (what) => {
     state.project.outline = JSON.parse(JSON.stringify(OUTLINE)) as Outline;
   }
   if (!state.project.operators) state.project.operators = {};
+  seedOperators();
   rescaleIfNeeded();
   state.filePath = r.path;
   $('#filename').textContent = `— ${r.path.split(/[\\/]/).pop()}`;
@@ -2160,10 +2170,10 @@ $('#check-updates').onclick = async () => {
 
 // ---------------------------------------------------------------- boot
 (async () => {
-  state.places = PLACES;
   if (!state.project.outline) {
     state.project.outline = JSON.parse(JSON.stringify(OUTLINE)) as Outline;
   }
+  seedOperators();
   rescaleIfNeeded();
   $('#ver').textContent = `v${await window.api.version()}`;
   const w = doc().weight ?? 2;
@@ -2171,4 +2181,11 @@ $('#check-updates').onclick = async () => {
   $('#weight-label').textContent = `${w.toFixed(1)}×`;
   fitToMap();
   renderPanels();
+  let wantOverview = true;
+  try {
+    wantOverview = localStorage.getItem('overview') !== 'closed';
+  } catch {
+    wantOverview = true;
+  }
+  if (wantOverview) void setOverview(true);
 })();

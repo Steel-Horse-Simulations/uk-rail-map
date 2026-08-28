@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>UK Rail Map — overview</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="overview">
+  <header class="titlebar">
+    <span class="dot"></span>
+    <span class="name">Overview</span>
+    <span class="file" id="what">whole network</span>
+  </header>
+
+  <div class="toolbar">
+    <button class="tool on" id="scope-all">Whole network</button>
+    <button class="tool" id="scope-view">Where I'm working</button>
+    <span class="sep"></span>
+    <button class="tool on" data-show="coast">Coastline</button>
+    <button class="tool on" data-show="routes">Routes</button>
+    <button class="tool on" data-show="services">Services</button>
+    <button class="tool on" data-show="labels">Names</button>
+  </div>
+
+  <div class="body">
+    <main id="canvas-wrap"><div id="canvas"></div></main>
+    <!-- kept for panels later: a legend, service lists, counts -->
+    <aside class="insp" id="panels" hidden></aside>
+  </div>
+
+  <div class="status"><span id="counts">waiting for the map…</span></div>
+<script src="overview.js"></script>
+</body>
+</html>
