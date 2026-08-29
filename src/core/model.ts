@@ -11,7 +11,8 @@ export type Cell = { x: number; y: number };
 /** A node in a route's path: either a station, or a plain bend point. */
 export type Node =
   | { kind: 'station'; id: string }
-  | { kind: 'bend'; at: Cell };
+  /** `auto` marks a bend the app added to keep the track square; yours are kept. */
+  | { kind: 'bend'; at: Cell; auto?: boolean };
 
 export type StationKind =
   | 'stop'
@@ -42,6 +43,8 @@ export interface Station {
    */
   rotation?: number;
   rotationLocked?: boolean;
+  /** Which side of the station the name sits on. Left out, it follows the tick. */
+  labelSide?: 'N' | 'S' | 'E' | 'W';
   /** Name drawn flat, tilted up, or tilted down. */
   labelAngle?: 0 | -45 | 45;
   /**

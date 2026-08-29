@@ -400,45 +400,9 @@ function draw() {
 
 /** Panels are rebuilt separately, so typing in a field never rips it out mid-keystroke. */
 function renderPanels() {
-  const d = doc();
-  const routes = $('#routes');
-  routes.innerHTML = '';
-  for (const rt of Object.values(d.routes)) {
-    const svcCount = Object.values(d.services).filter((s) => s.routeIds.includes(rt.id)).length;
-    const li = document.createElement('li');
-    if (rt.id === state.selectedRoute) li.className = 'sel';
-    li.innerHTML =
-      `<span class="bar" style="background:#9AA8B6"></span>${esc(rt.name)}` +
-      `<span class="tag">${svcCount ? `${svcCount} svc` : 'no services'}</span>`;
-    li.onclick = () => {
-      state.selectedRoute = rt.id;
-      state.focus = 'route';
-      renderPanels();
-    };
-    routes.appendChild(li);
-  }
-  $('#routes-empty').style.display = Object.keys(d.routes).length ? 'none' : '';
-
-  const services = $('#services');
-  services.innerHTML = '';
-  const palette = ['#0A55C4', '#0E8A3E', '#E2620E', '#7A2E8E', '#C4161C', '#0E8C8C'];
-  Object.values(d.services)
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .forEach((sv, i) => {
-      const li = document.createElement('li');
-      if (sv.id === state.selectedService && state.focus === 'service') li.className = 'sel';
-      li.innerHTML =
-        `<span class="bar" style="background:${sv.colour ?? palette[i % palette.length]}"></span>${esc(sv.name)}` +
-        `<span class="tag">${sv.routeIds.length} route${sv.routeIds.length === 1 ? '' : 's'}</span>`;
-      li.onclick = () => {
-        state.selectedService = sv.id;
-        state.focus = 'service';
-        renderPanels();
-      };
-      services.appendChild(li);
-    });
-  $('#services-empty').style.display = Object.keys(d.services).length ? 'none' : '';
-
+  // the list is built in one place only — a second copy of this was why branches
+  // never appeared indented
+  refreshLists();
   renderInspector();
 }
 
@@ -481,6 +445,14 @@ function renderInspector() {
     <div class="seg" id="tside">
       <button data-s="right" class="${st.tickSide === 'left' ? '' : 'on'}">One side</button>
       <button data-s="left" class="${st.tickSide === 'left' ? 'on' : ''}">The other</button>
+    </div>
+    <label class="f">Name side</label>
+    <div class="seg" id="lside">
+      <button data-l="" class="${st.labelSide ? '' : 'on'}">Auto</button>
+      <button data-l="N" class="${st.labelSide === 'N' ? 'on' : ''}">Top</button>
+      <button data-l="S" class="${st.labelSide === 'S' ? 'on' : ''}">Bottom</button>
+      <button data-l="W" class="${st.labelSide === 'W' ? 'on' : ''}">Left</button>
+      <button data-l="E" class="${st.labelSide === 'E' ? 'on' : ''}">Right</button>
     </div>
     <label class="f">Name angle</label>
     <div class="seg" id="lang">
@@ -549,6 +521,14 @@ function renderInspector() {
   $('#tside').querySelectorAll('button').forEach((b) => {
     b.onclick = () => {
       st.tickSide = (b as HTMLButtonElement).dataset.s as Station['tickSide'];
+      draw();
+      renderPanels();
+    };
+  });
+  $('#lside').querySelectorAll('button').forEach((b) => {
+    b.onclick = () => {
+      const v = (b as HTMLButtonElement).dataset.l;
+      st.labelSide = (v || undefined) as Station['labelSide'];
       draw();
       renderPanels();
     };
@@ -633,6 +613,11 @@ function startBranch(parentId: string, stub: boolean, existingBranchId?: string)
   document.querySelector('.tool[data-tool="route"]')?.classList.add('on');
   cancelRoute();
   state.branchOf = { parentId, stub, branchId: existingBranchId };
+  $('#cancel-route').classList.remove('hidden');
+  $('#drawing-what').textContent = stub
+    ? 'Drawing a second connection — click where it leaves the parent'
+    : `Drawing a branch off ${doc().routes[parentId]?.name ?? 'the route'} — click where it leaves`;
+  $('#drawing-what').classList.remove('hidden');
   setMessage(
     stub
       ? 'Click where the second curve leaves the parent, then draw it.'
@@ -1090,6 +1075,7 @@ function renderRouteInspector() {
       sv.routeIds = sv.routeIds.filter((r) => r !== rt.id);
     }
     for (const sv of Object.values(d.services)) {
+      sv.routeIds = sv.routeIds.filter((r) => d.routes[r]);
       if (sv.routeIds.length === 0) delete d.services[sv.id];
     }
     state.selectedRoute = undefined;
@@ -1707,8 +1693,15 @@ wrap.addEventListener('mousedown', (ev) => {
       setMessage('Bend placed.');
     }
 
-    const stops = state.drawing.filter((n) => n.kind === 'station').length;
-    $('#finish-route').classList.toggle('hidden', stops < 2);
+    // a branch needs only its junction and one station; a connecting curve may
+    // have no stations at all, so the test is points, not stops
+    const enough = state.branchOf ? state.drawing.length >= 2 : state.drawing.filter((n) => n.kind === 'station').length >= 2;
+    $('#finish-route').textContent = state.branchOf
+      ? state.branchOf.stub
+        ? 'Finish connection'
+        : 'Finish branch'
+      : 'Finish route';
+    $('#finish-route').classList.toggle('hidden', !enough);
     $('#cancel-route').classList.remove('hidden');
     draw();
     return;
@@ -1750,7 +1743,6 @@ wrap.addEventListener('mousemove', (ev) => {
         const dx = cell.x - anchor.x;
         const dy = cell.y - anchor.y;
         if (dx || dy) st.cells = st.cells.map((k) => ({ x: k.x + dx, y: k.y + dy }));
-        legaliseAround(rt, state.nodeDrag);
       }
     }
     draw();
@@ -1783,29 +1775,51 @@ wrap.addEventListener('mousemove', (ev) => {
 });
 
 /**
- * Put a bend either side of a moved point where the track no longer runs square
- * or diagonal. Without it a drag can leave a route the renderer has to guess at.
+ * Square a route up once a drag has finished.
+ *
+ * Done at the end rather than while the mouse moves — doing it live added a fresh
+ * bend on every mouse move and left a spike where a corner should be. Bends the
+ * app added before are thrown away first, so repeated dragging does not pile them
+ * up; bends you placed yourself are left alone.
  */
-function legaliseAround(rt: Route, index: number) {
+function legaliseRoute(rt: Route) {
   const d = doc();
   const cellOf = (n: Node) => (n.kind === 'bend' ? n.at : d.stations[n.id]?.cells[0]);
-  for (const [i, j] of [
-    [index - 1, index],
-    [index, index + 1],
-  ]) {
-    const a = rt.path[i];
-    const b = rt.path[j];
-    if (!a || !b) continue;
-    const ca = cellOf(a);
-    const cb = cellOf(b);
-    if (!ca || !cb || isOctilinear(ca, cb)) continue;
-    const bend = elbow(ca, cb);
-    if (bend) rt.path.splice(j, 0, { kind: 'bend', at: bend });
+  rt.path = rt.path.filter((n) => !(n.kind === 'bend' && n.auto));
+  const out: Node[] = [];
+  for (let i = 0; i < rt.path.length; i++) {
+    const node = rt.path[i];
+    if (i > 0) {
+      const ca = cellOf(rt.path[i - 1]);
+      const cb = cellOf(node);
+      if (ca && cb && !isOctilinear(ca, cb)) {
+        const bend = elbow(ca, cb);
+        if (bend) out.push({ kind: 'bend', at: bend, auto: true });
+      }
+    }
+    out.push(node);
+  }
+  rt.path = out;
+}
+
+/** Every route this station sits on needs squaring up after it moves. */
+function legaliseRoutesFor(stationId: string) {
+  for (const rt of Object.values(doc().routes)) {
+    if (rt.path.some((n) => n.kind === 'station' && n.id === stationId)) legaliseRoute(rt);
   }
 }
 
 window.addEventListener('mouseup', () => {
+  if (state.nodeDrag !== undefined && state.selectedRoute) {
+    const rt = doc().routes[state.selectedRoute];
+    const node = rt?.path[state.nodeDrag];
+    if (rt) {
+      if (node?.kind === 'station') legaliseRoutesFor(node.id);
+      else legaliseRoute(rt);
+    }
+  }
   if (state.dragging) {
+    legaliseRoutesFor(state.dragging);
     respreadAround(state.dragging);
     draw();
     renderPanels();
@@ -1930,6 +1944,8 @@ function flipLastBend() {
 $('#flip-bend').onclick = flipLastBend;
 
 function cancelRoute() {
+  $('#finish-route').textContent = 'Finish route';
+  $('#drawing-what').classList.add('hidden');
   state.branchOf = undefined;
   state.branchJunction = undefined;
   state.drawing = [];
@@ -1942,8 +1958,9 @@ function cancelRoute() {
 $('#cancel-route').onclick = cancelRoute;
 
 $('#finish-route').onclick = () => {
-  if (state.drawing.filter((n) => n.kind === 'station').length < 2) {
-    setMessage('A route needs at least two stations.');
+  const needStations = state.branchOf ? 1 : 2;
+  if (state.drawing.filter((n) => n.kind === 'station').length < needStations && !state.branchOf?.stub) {
+    setMessage(`A ${state.branchOf ? 'branch' : 'route'} needs at least ${needStations} station${needStations > 1 ? 's' : ''}.`);
     return;
   }
   const d = doc();
@@ -2007,6 +2024,48 @@ $('#lock').onclick = () => {
   draw();
   renderPanels();
 };
+
+$('#save').onclick = save;
+
+$('#export-svg').onclick = async () => {
+  const svg = renderSvg({
+    doc: doc(),
+    operators: state.project.operators,
+    outline: state.project.outline,
+  });
+  const p = await window.api.exportSvg(svg);
+  if (p) setMessage(`Exported to ${p}`);
+};
+
+/**
+ * Light or dark chrome. Remembered between sessions, and follows the system on
+ * first run. The map itself stays light — it is drawn to be printed on white.
+ */
+function applyTheme(dark: boolean) {
+  document.body.classList.toggle('dark', dark);
+  const btn = $('#theme');
+  btn.innerHTML = dark ? '&#9788;' : '&#9789;';
+  btn.title = dark ? 'Switch to light' : 'Switch to dark';
+  try {
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  } catch {
+    /* not worth failing over */
+  }
+}
+
+$('#theme').onclick = () => applyTheme(!document.body.classList.contains('dark'));
+
+(() => {
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem('theme');
+  } catch {
+    saved = null;
+  }
+  const prefersDark =
+    typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(saved ? saved === 'dark' : prefersDark);
+})();
 
 $('#fit').onclick = fitToMap;
 

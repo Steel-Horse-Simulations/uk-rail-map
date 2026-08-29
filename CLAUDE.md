@@ -176,3 +176,74 @@ Every one of these was asked for specifically. Do not quietly change them.
   station database and the outline. Not started.
 - Interactive HTML export for the website. `src/core` is DOM-free so it can be
   reused directly.
+
+---
+
+## Bugs that shipped, and why
+
+Real faults from real releases. Reintroducing any of these is a regression.
+
+- **Never string a service's routes end to end.** A branch leaves from the middle
+  of its parent, so joining one route's last cell to the next route's first
+  describes track that does not exist, and the octilinear check rightly refuses
+  it. `serviceRuns` returns one run per route; where they meet at a junction they
+  simply meet.
+- **Never let one bad leg kill the drawing.** When `renderSvg` throws, the canvas
+  keeps the last good picture — so every later edit silently does nothing and the
+  app appears broken in ways unrelated to the real fault. It cost a whole release
+  and a confusing bug report. Skip the leg and carry on.
+- **Build each UI list in one place.** A duplicate copy of the routes list meant
+  branches never appeared nested, despite the nesting code being correct.
+- **Scale sizes from the line width**, never fixed units. A hardcoded 2.6-unit
+  marker outline was invisible at one grid pitch and swamped the line at another.
+- **Grid pitch and drawing weight are separate settings.** Coarsening the pitch to
+  get thicker lines rounded every station onto a grid kilometres across and
+  collapsed neighbours together. Pitch controls placement; weight controls
+  thickness.
+- **Check that ids in index.html match the ones app.ts reaches for.** Removing a
+  feature has twice taken neighbouring handlers with it — dark mode, Save and
+  Export SVG were all silently left without handlers. A short script comparing
+  `id="..."` in the HTML against `$('#...')` in the renderer catches it in
+  seconds and is worth running before shipping.
+
+---
+
+## Order of work agreed with the owner
+
+1. Branches and shared sections
+   - branches: done (v0.12.0, repaired in v0.12.1)
+   - shared sections: next. Two routes pointing at one piece of railway; offered
+     when a route is drawn over stations already on another; editing one moves
+     both; must be able to span an area boundary
+2. **Areas** — named containers placed on the map. They nest, cannot overlap and
+   size themselves to their contents. One shared scale for all of them; the
+   coastline does not grow with them and becomes a rough backdrop, as on the
+   Underground and Railway 200 maps
+3. **Connections between areas** — build to the edge and it continues into
+   whatever lies beyond; neighbours' routes show as labelled stubs at the edge;
+   he chooses which stub joins which; crossings held at the same height; warnings
+   for stray ends and for connections disturbed by moving an area, each resolved
+   by confirming or redrawing
+4. **Services mode** — a separate mode, working one area at a time. Per-area start
+   and end dropdowns where either end may be set to the neighbouring area, which
+   is how a service continues; calls set by tick or by clicking the station; a
+   list of unfinished services; continue-to-next and back-to-previous buttons
+5. **Ordering and banding**, inside services mode — per route and per shared
+   section rather than one global list, with a warning when an ordering forces a
+   service to cross others at a junction, and colour banding along shared track
+6. **Via selection**, where a route offers two ways round
+
+## Parked — do not build without asking
+
+- Showing that a station is only called at when a service runs one way
+- One-way sections between particular stations, with a direction toggle
+
+## How the owner works
+
+- He tests on Windows and reports against a numbered checklist. Supply one with
+  every change: what to try, what should happen, and what is most likely wrong.
+- He would rather be asked than have things guessed at, and asks for questions one
+  area at a time — a long list at once is worse than none.
+- New ideas go on a list; finish the checklist in hand before starting them.
+- Design conversations happen in the Claude chat app, which holds the full history
+  and specification. Building happens here.

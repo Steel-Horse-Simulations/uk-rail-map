@@ -150,3 +150,8 @@ body.overview #canvas-wrap{cursor:default}
 
 .twig{color:#9AA8B6;margin-right:-3px;font-size:12px}
 body.dark .twig{color:#6C7C8C}
+
+.banner{font-size:12px;color:#241701;background:#F6D9A6;border:1px solid #E0AE5A;
+  border-radius:5px;padding:3px 9px;white-space:nowrap}
+.banner.hidden{display:none}
+body.dark .banner{background:#4A3A1A;color:#F6E3C0;border-color:#6A5426}

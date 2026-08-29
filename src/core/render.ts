@@ -79,37 +79,46 @@ function routeHasServices(doc: MapDoc, routeId: string): boolean {
 }
 
 /**
- * The cells a service runs over.
+ * The cells a service runs over, as one run per route.
  *
- * A service does not have to cover its routes end to end: fromStation and
- * toStation cut it short, so a train can terminate halfway along the line and
- * the drawn line stops there rather than running on to the buffers.
+ * Routes are NOT strung end to end. A branch leaves from the middle of its
+ * parent, so joining the parent's last cell to the branch's first describes a
+ * leap across the map that is not track at all — which is what threw "not on 90
+ * or 45 degrees" and stopped the whole map drawing. Each route is drawn as its
+ * own run; where they meet at a junction they simply meet.
  */
-function servicePath(doc: MapDoc, svc: Service): Cell[] {
-  const nodes: { cell: Cell; station?: string }[] = [];
+function serviceRuns(doc: MapDoc, svc: Service): Cell[][] {
+  const reach = serviceStations(doc, svc);
+  const runs: Cell[][] = [];
+
   for (const rid of svc.routeIds) {
     const route = doc.routes[rid];
     if (!route) continue;
+
+    const nodes: { cell: Cell; station?: string }[] = [];
     for (const node of route.path) {
       const cell = nodeCell(doc, node);
       const last = nodes[nodes.length - 1];
       if (last && last.cell.x === cell.x && last.cell.y === cell.y) continue;
       nodes.push({ cell, station: node.kind === 'station' ? node.id : undefined });
     }
-  }
+    if (nodes.length < 2) continue;
 
-  let start = 0;
-  let end = nodes.length - 1;
-  if (svc.fromStation) {
-    const i = nodes.findIndex((n) => n.station === svc.fromStation);
-    if (i >= 0) start = i;
+    // trim this route to the part the service actually reaches
+    let start = 0;
+    let end = nodes.length - 1;
+    if (svc.fromStation || svc.toStation) {
+      const first = nodes.findIndex((n) => n.station && reach.includes(n.station));
+      const lastIdx = nodes.map((n) => (n.station && reach.includes(n.station) ? 1 : 0)).lastIndexOf(1);
+      if (first >= 0 && lastIdx >= first) {
+        start = first;
+        end = lastIdx;
+      }
+    }
+    const run = nodes.slice(start, end + 1).map((n) => n.cell);
+    if (run.length >= 2) runs.push(run);
   }
-  if (svc.toStation) {
-    const i = nodes.map((n) => n.station).lastIndexOf(svc.toStation);
-    if (i >= 0) end = i;
-  }
-  if (start > end) [start, end] = [end, start];
-  return nodes.slice(start, end + 1).map((n) => n.cell);
+  return runs;
 }
 
 /** The stations a service actually reaches, in order, after trimming. */
@@ -144,19 +153,29 @@ export function serviceStations(doc: MapDoc, svc: Service): string[] {
  * corner is inserted instead — the same one the route tool would have added —
  * so the map always draws and the worst case is a bend you did not choose.
  */
-function stepsFor(cells: Cell[]): Step[] {
+/**
+ * Break a run of cells into single steps, inserting the corner where two are not
+ * already in line. A leg that still cannot be walked is skipped rather than
+ * thrown: one bad leg should cost you that leg, not the entire map.
+ */
+function stepsForRun(cells: Cell[]): Step[] {
   const out: Step[] = [];
   for (let i = 0; i + 1 < cells.length; i++) {
     const a = cells[i];
     const b = cells[i + 1];
-    const bend = elbow(a, b);
-    if (bend) {
-      out.push(...unitSteps(a, bend), ...unitSteps(bend, b));
-    } else {
-      out.push(...unitSteps(a, b));
+    try {
+      const bend = elbow(a, b);
+      if (bend) out.push(...unitSteps(a, bend), ...unitSteps(bend, b));
+      else out.push(...unitSteps(a, b));
+    } catch {
+      /* skip the leg */
     }
   }
   return out;
+}
+
+function stepsFor(runs: Cell[][]): Step[] {
+  return runs.flatMap(stepsForRun);
 }
 
 export interface RenderOptions {
@@ -198,14 +217,14 @@ export function renderSvg(opts: RenderOptions): string {
   const lanes = buildLanes(
     services.map<LaneInput>((s, i) => ({
       id: s.id,
-      steps: stepsFor(servicePath(doc, s)),
+      steps: stepsFor(serviceRuns(doc, s)),
       rank: s.order ?? i,
     })),
   );
 
   const drawn: Drawn[] = services.map((svc, i) => {
-    const cells = servicePath(doc, svc);
-    const steps = stepsFor(cells);
+    const runs = serviceRuns(doc, svc);
+    const steps = stepsFor(runs);
     const colour = serviceColour(svc, operators, palette[i % palette.length]);
     const pts = lanePolyline(steps, svc.id, lanes, toPx, pitch);
 
@@ -255,8 +274,17 @@ export function renderSvg(opts: RenderOptions): string {
     if (routeHasServices(doc, rt.id)) continue;
     const cells: Cell[] = rt.path.map((n) => nodeCell(doc, n));
     if (cells.length < 2) continue;
-    let d = `M ${(cells[0].x * cs).toFixed(1)} ${(cells[0].y * cs).toFixed(1)}`;
-    for (const c of cells.slice(1)) d += ` L ${(c.x * cs).toFixed(1)} ${(c.y * cs).toFixed(1)}`;
+    // routes were drawn as plain straight segments, so their corners came out
+    // sharp while services curved; they go through the same rounding now
+    const pts = stepsForRun(cells).reduce<{ x: number; y: number; lane: number }[]>(
+      (acc, step, i) => {
+        if (i === 0) acc.push({ x: step.a.x * cs, y: step.a.y * cs, lane: 0 });
+        acc.push({ x: step.b.x * cs, y: step.b.y * cs, lane: 0 });
+        return acc;
+      },
+      [],
+    );
+    const d = roundedPath(pts, theme.cornerRadius);
     const col = (opts.buildColours && rt.buildColour) || theme.grey;
     baseLines.push(
       `<path d="${d}" fill="none" stroke="${col}" stroke-width="${theme.lineWidth}" stroke-linejoin="round" stroke-linecap="round"/>`,
@@ -478,6 +506,11 @@ export function renderSvg(opts: RenderOptions): string {
         anchorPt = c;
         away = { x: -axis.y * sign, y: axis.x * sign };
       }
+    }
+    // a chosen side wins over whichever way the tick happens to point
+    if (st.labelSide) {
+      away = compass(st.labelSide);
+      anchorPt = st.interchange || calling.length > 1 ? stationCentre(st, cs) : anchorPt;
     }
     const clear = (st.interchange || calling.length > 1 ? R + border : theme.lineWidth * 0.76) + theme.lineWidth * 0.7;
     const x = anchorPt.x + away.x * clear;

@@ -55,7 +55,7 @@ function networkBounds(p: Project) {
   }
   if (!Number.isFinite(minX)) return null;
   const cs = doc.cellSize;
-  const pad = 12 * cs;
+  const pad = Math.max(28 * cs, (maxX - minX) * cs * 0.08);
   return {
     x: minX * cs - pad,
     y: minY * cs - pad,
